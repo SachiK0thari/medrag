@@ -1,0 +1,176 @@
+"""Held-out evaluation question set.
+
+30 hand-curated questions on GLP-1 cardiovascular outcomes, each tagged with
+PMIDs of papers a domain expert would consider authoritative answers.
+
+These are SEEDS — review and expand on Sunday morning before running the eval.
+The 'gold_pmids' for each question should be filled in after a manual PubMed
+check so the retrieval metrics are meaningful.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class EvalQuestion(BaseModel):
+    qid: str
+    question: str
+    gold_pmids: list[str] = Field(default_factory=list)
+    category: str
+    notes: str | None = None
+
+
+# Seed list — fill gold_pmids after curation Sunday morning.
+QUESTIONS: list[EvalQuestion] = [
+    EvalQuestion(
+        qid="q01",
+        question="What was the primary cardiovascular outcome in the LEADER trial of liraglutide?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q02",
+        question="How did semaglutide affect MACE in the SUSTAIN-6 trial?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q03",
+        question="What were the cardiovascular findings of the SELECT trial in patients with obesity but without diabetes?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q04",
+        question="What is the proposed mechanism by which GLP-1 receptor agonists reduce cardiovascular events?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q05",
+        question="How does the cardiovascular benefit of GLP-1 RAs compare to SGLT2 inhibitors?",
+        category="comparison",
+    ),
+    EvalQuestion(
+        qid="q06",
+        question="What is the effect of GLP-1 receptor agonists on stroke risk in patients with type 2 diabetes?",
+        category="outcome",
+    ),
+    EvalQuestion(
+        qid="q07",
+        question="What were the renal outcomes observed in the REWIND trial of dulaglutide?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q08",
+        question="How do GLP-1 receptor agonists affect heart failure hospitalization risk?",
+        category="outcome",
+    ),
+    EvalQuestion(
+        qid="q09",
+        question="What is the safety profile of GLP-1 RAs with respect to pancreatitis?",
+        category="safety",
+    ),
+    EvalQuestion(
+        qid="q10",
+        question="What did EXSCEL show about exenatide and cardiovascular outcomes?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q11",
+        question="Are GLP-1 receptor agonists recommended in current ADA guidelines for patients with established ASCVD?",
+        category="guidelines",
+    ),
+    EvalQuestion(
+        qid="q12",
+        question="What is the magnitude of HbA1c reduction with semaglutide in cardiovascular outcome trials?",
+        category="efficacy",
+    ),
+    EvalQuestion(
+        qid="q13",
+        question="What blood pressure changes have been reported with GLP-1 receptor agonist treatment?",
+        category="outcome",
+    ),
+    EvalQuestion(
+        qid="q14",
+        question="How does tirzepatide differ mechanistically from pure GLP-1 receptor agonists?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q15",
+        question="What were the cardiovascular results of the SURPASS-CVOT or related tirzepatide CV trials?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q16",
+        question="What is the incidence of gastrointestinal adverse events with GLP-1 receptor agonists?",
+        category="safety",
+    ),
+    EvalQuestion(
+        qid="q17",
+        question="How do GLP-1 receptor agonists influence body weight in cardiovascular outcome trials?",
+        category="efficacy",
+    ),
+    EvalQuestion(
+        qid="q18",
+        question="What evidence exists for GLP-1 RA use in patients with chronic kidney disease?",
+        category="population",
+    ),
+    EvalQuestion(
+        qid="q19",
+        question="Has any GLP-1 receptor agonist demonstrated mortality benefit in cardiovascular outcome trials?",
+        category="outcome",
+    ),
+    EvalQuestion(
+        qid="q20",
+        question="What does meta-analytic evidence show about MACE reduction across the GLP-1 RA class?",
+        category="meta_analysis",
+    ),
+    EvalQuestion(
+        qid="q21",
+        question="What were the inclusion criteria for the LEADER trial population?",
+        category="trial_design",
+    ),
+    EvalQuestion(
+        qid="q22",
+        question="How do GLP-1 receptor agonists affect inflammatory biomarkers like CRP?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q23",
+        question="What is the role of GLP-1 RAs in primary cardiovascular prevention?",
+        category="population",
+    ),
+    EvalQuestion(
+        qid="q24",
+        question="What does PIONEER 6 tell us about oral semaglutide and cardiovascular safety?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q25",
+        question="How long does it take for GLP-1 RA cardiovascular benefit to emerge in trial Kaplan-Meier curves?",
+        category="trial_outcome",
+    ),
+    EvalQuestion(
+        qid="q26",
+        question="What proportion of MACE reduction with GLP-1 RAs is attributable to weight loss versus glycemic control?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q27",
+        question="Are there subgroup differences in GLP-1 RA cardiovascular benefit by baseline HbA1c?",
+        category="subgroup",
+    ),
+    EvalQuestion(
+        qid="q28",
+        question="What is known about GLP-1 receptor expression in cardiac tissue?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q29",
+        question="What contraindications exist for GLP-1 receptor agonist therapy?",
+        category="safety",
+    ),
+    EvalQuestion(
+        qid="q30",
+        question="How have ESC guidelines incorporated GLP-1 RA evidence for ASCVD patients?",
+        category="guidelines",
+    ),
+]
