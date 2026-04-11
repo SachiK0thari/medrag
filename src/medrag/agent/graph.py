@@ -1,28 +1,338 @@
 """LangGraph agent loop.
 
 State machine:
-    decompose -> retrieve -> reflect -> (re-retrieve | answer) -> end
+    decompose -> retrieve -> reflect -> (retrieve | answer) -> end
 
-State carries the question, sub-queries, accumulated retrieved chunks,
-reflection outcomes, and final Answer.
+`retrieve` only runs the sub-queries that haven't been executed yet, so the
+reflect node can append a follow-up sub-query and loop without re-running
+anything. Accumulated `RetrievedChunk`s are deduped by chunk_id and kept in
+rerank-score order so the answer node can slice the top-N directly.
 """
 
 from __future__ import annotations
 
-from medrag.models import Answer
+import json
+import re
+from typing import TYPE_CHECKING, TypedDict
 
-# TODO(saturday-evening): build the LangGraph StateGraph.
-# Nodes:
-#   decompose_node: LLM -> list[SubQuery]
-#   retrieve_node: HybridRetriever + Reranker over each sub-query
-#   reflect_node: LLM judges sufficiency; sets needs_more flag
-#   answer_node: LLM produces cited Answer with structured citation extraction
-# Edges: conditional from reflect -> retrieve (loop, max N) or -> answer
+from langgraph.graph import END, START, StateGraph
+
+from medrag.agent import llm
+from medrag.agent.prompts import (
+    ANSWER_SYSTEM,
+    ANSWER_USER_TEMPLATE,
+    DECOMPOSE_SYSTEM,
+    REFLECT_SYSTEM,
+)
+from medrag.config import get_settings
+from medrag.models import (
+    Answer,
+    Citation,
+    RetrievedChunk,
+    SubQuery,
+)
+from medrag.retrieval.bm25 import BM25Retriever
+from medrag.retrieval.dense import DenseRetriever
+from medrag.retrieval.hybrid import HybridRetriever
+from medrag.retrieval.reranker import Reranker
+from medrag.store import Store
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
+
+
+_CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+
+
+class AgentState(TypedDict, total=False):
+    question: str
+    sub_queries: list[SubQuery]
+    retrieved: list[RetrievedChunk]
+    n_retrieval_calls: int
+    reflection_loops: int
+    needs_more: bool
+    missing: str
+    answer: Answer
+
+
+# --------------------------------------------------------------------------- #
+# Parsing helpers                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def _extract_json(text: str, opener: str, closer: str) -> str | None:
+    """Return the first top-level JSON substring bounded by opener/closer."""
+    start = text.find(opener)
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _parse_sub_queries(text: str, fallback: str, limit: int) -> list[SubQuery]:
+    raw = _extract_json(text, "[", "]")
+    if raw is not None:
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            items = None
+        if isinstance(items, list):
+            parsed: list[SubQuery] = []
+            for item in items[:limit]:
+                if isinstance(item, dict) and "text" in item:
+                    parsed.append(
+                        SubQuery(
+                            text=str(item["text"]).strip(),
+                            rationale=(
+                                str(item["rationale"]).strip() if item.get("rationale") else None
+                            ),
+                        )
+                    )
+                elif isinstance(item, str):
+                    parsed.append(SubQuery(text=item.strip()))
+            if parsed:
+                return parsed
+    return [SubQuery(text=fallback, rationale="fallback: decomposition failed")]
+
+
+def _parse_reflection(text: str) -> tuple[bool, str]:
+    raw = _extract_json(text, "{", "}")
+    if raw is None:
+        return True, ""
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return True, ""
+    sufficient = bool(obj.get("sufficient", False))
+    missing = str(obj.get("missing", "")).strip()
+    return sufficient, missing
+
+
+# --------------------------------------------------------------------------- #
+# Source rendering + citation extraction                                       #
+# --------------------------------------------------------------------------- #
+
+
+def _render_sources(chunks: list[RetrievedChunk]) -> str:
+    lines: list[str] = []
+    for i, rc in enumerate(chunks, start=1):
+        header = f"[{i}] {rc.paper.display_citation} (PMID {rc.paper.pmid})"
+        snippet = rc.chunk.text.strip().replace("\n", " ")
+        if len(snippet) > 600:
+            snippet = snippet[:600] + "..."
+        lines.append(f"{header}\n    {snippet}")
+    return "\n\n".join(lines)
+
+
+def _extract_citations(answer_text: str, sources: list[RetrievedChunk]) -> list[Citation]:
+    used_markers: list[int] = []
+    seen: set[int] = set()
+    for match in _CITATION_MARKER_RE.finditer(answer_text):
+        n = int(match.group(1))
+        if 1 <= n <= len(sources) and n not in seen:
+            seen.add(n)
+            used_markers.append(n)
+
+    citations: list[Citation] = []
+    for n in used_markers:
+        rc = sources[n - 1]
+        snippet = rc.chunk.text.strip().replace("\n", " ")
+        if len(snippet) > 400:
+            snippet = snippet[:400] + "..."
+        citations.append(
+            Citation(
+                marker=f"[{n}]",
+                pmid=rc.paper.pmid,
+                chunk_id=rc.chunk.chunk_id,
+                display_citation=rc.paper.display_citation,
+                snippet=snippet,
+            )
+        )
+    return citations
+
+
+def _confidence(citations: list[Citation], sources: list[RetrievedChunk]) -> float:
+    if not sources:
+        return 0.0
+    if not citations:
+        return 0.2
+    base = 0.5 + 0.1 * len(citations)
+    return max(0.0, min(1.0, base))
+
+
+def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    seen: set[str] = set()
+    out: list[RetrievedChunk] = []
+    for rc in chunks:
+        cid = rc.chunk.chunk_id
+        if cid in seen:
+            continue
+        seen.add(cid)
+        out.append(rc)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Agent                                                                        #
+# --------------------------------------------------------------------------- #
 
 
 class MedRagAgent:
-    def __init__(self) -> None:
-        pass
+    """LangGraph-backed agentic RAG loop over the hybrid retriever."""
+
+    def __init__(
+        self,
+        *,
+        hybrid: HybridRetriever | None = None,
+        reranker: Reranker | None = None,
+        store: Store | None = None,
+    ) -> None:
+        self._settings = get_settings()
+        self._store = store
+        self._hybrid = hybrid
+        self._reranker = reranker
+        self._graph: CompiledStateGraph | None = None
+
+    # ---- lazy component wiring ------------------------------------------ #
+
+    def _get_hybrid(self) -> HybridRetriever:
+        if self._hybrid is None:
+            if self._store is None:
+                self._store = Store()
+            bm25 = BM25Retriever.from_store(self._store)
+            dense = DenseRetriever(store=self._store)
+            self._hybrid = HybridRetriever(bm25=bm25, dense=dense)
+        return self._hybrid
+
+    def _get_reranker(self) -> Reranker:
+        if self._reranker is None:
+            self._reranker = Reranker()
+        return self._reranker
+
+    def _get_graph(self) -> CompiledStateGraph:
+        if self._graph is None:
+            self._graph = self._build_graph()
+        return self._graph
+
+    # ---- nodes ----------------------------------------------------------- #
+
+    def _decompose_node(self, state: AgentState) -> AgentState:
+        resp = llm.complete(DECOMPOSE_SYSTEM, state["question"])
+        sub_queries = _parse_sub_queries(
+            resp.text,
+            fallback=state["question"],
+            limit=self._settings.max_subqueries,
+        )
+        return {"sub_queries": sub_queries}
+
+    def _retrieve_node(self, state: AgentState) -> AgentState:
+        hybrid = self._get_hybrid()
+        reranker = self._get_reranker()
+        already = state.get("n_retrieval_calls", 0)
+        pending = state["sub_queries"][already:]
+
+        new_chunks: list[RetrievedChunk] = []
+        for sq in pending:
+            fused = hybrid.search(sq.text)
+            if not fused:
+                continue
+            reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
+            new_chunks.extend(reranked)
+
+        merged = _dedupe_by_chunk_id(state.get("retrieved", []) + new_chunks)
+        merged.sort(key=lambda rc: rc.score, reverse=True)
+        return {
+            "retrieved": merged,
+            "n_retrieval_calls": already + len(pending),
+        }
+
+    def _reflect_node(self, state: AgentState) -> AgentState:
+        loops = state.get("reflection_loops", 0)
+        if loops >= self._settings.max_reflection_loops:
+            return {"needs_more": False, "missing": "", "reflection_loops": loops + 1}
+
+        top = state.get("retrieved", [])[: self._settings.rerank_top_k]
+        if not top:
+            return {"needs_more": False, "missing": "", "reflection_loops": loops + 1}
+
+        user = f"Question: {state['question']}\n\nSources:\n{_render_sources(top)}"
+        resp = llm.complete(REFLECT_SYSTEM, user, max_tokens=256)
+        sufficient, missing = _parse_reflection(resp.text)
+        return {
+            "needs_more": (not sufficient) and bool(missing),
+            "missing": missing,
+            "reflection_loops": loops + 1,
+        }
+
+    def _followup_node(self, state: AgentState) -> AgentState:
+        missing = state.get("missing", "").strip()
+        if not missing:
+            return {}
+        follow_up = SubQuery(text=missing, rationale="follow-up from reflection")
+        return {"sub_queries": state["sub_queries"] + [follow_up]}
+
+    def _answer_node(self, state: AgentState) -> AgentState:
+        top = state.get("retrieved", [])[: self._settings.rerank_top_k]
+        sources_str = _render_sources(top)
+        user = ANSWER_USER_TEMPLATE.format(question=state["question"], sources=sources_str)
+        resp = llm.complete(ANSWER_SYSTEM, user)
+        text = resp.text.strip()
+        citations = _extract_citations(text, top)
+        answer = Answer(
+            question=state["question"],
+            text=text,
+            citations=citations,
+            sub_queries=state.get("sub_queries", []),
+            confidence=_confidence(citations, top),
+            n_retrieval_calls=max(state.get("n_retrieval_calls", 1), 1),
+            total_chunks_considered=len(state.get("retrieved", [])),
+        )
+        return {"answer": answer}
+
+    # ---- graph ----------------------------------------------------------- #
+
+    def _build_graph(self) -> CompiledStateGraph:
+        graph: StateGraph[AgentState] = StateGraph(AgentState)
+        graph.add_node("decompose", self._decompose_node)
+        graph.add_node("retrieve", self._retrieve_node)
+        graph.add_node("reflect", self._reflect_node)
+        graph.add_node("followup", self._followup_node)
+        graph.add_node("generate", self._answer_node)
+
+        graph.add_edge(START, "decompose")
+        graph.add_edge("decompose", "retrieve")
+        graph.add_edge("retrieve", "reflect")
+        graph.add_conditional_edges(
+            "reflect",
+            lambda s: "followup" if s.get("needs_more") else "generate",
+            {"followup": "followup", "generate": "generate"},
+        )
+        graph.add_edge("followup", "retrieve")
+        graph.add_edge("generate", END)
+        return graph.compile()
+
+    # ---- public API ------------------------------------------------------ #
 
     def answer(self, question: str) -> Answer:
-        raise NotImplementedError("implement Saturday evening")
+        initial: AgentState = {
+            "question": question,
+            "sub_queries": [],
+            "retrieved": [],
+            "n_retrieval_calls": 0,
+            "reflection_loops": 0,
+            "needs_more": False,
+            "missing": "",
+        }
+        final = self._get_graph().invoke(initial)
+        answer = final.get("answer")
+        if answer is None:
+            raise RuntimeError("agent graph terminated without producing an Answer")
+        return answer

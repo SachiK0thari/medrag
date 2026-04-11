@@ -37,6 +37,7 @@ with st.sidebar:
         "What was the primary cardiovascular outcome in the LEADER trial?",
         "How does semaglutide compare to dulaglutide for MACE reduction?",
         "What are the proposed mechanisms of GLP-1 RA cardiovascular benefit?",
+        "How much does semaglutide lower systolic blood pressure in cardiovascular outcome trials?",
     ]
     for ex in examples:
         if st.button(ex, key=ex, use_container_width=True):

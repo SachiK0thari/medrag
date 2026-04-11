@@ -173,4 +173,19 @@ QUESTIONS: list[EvalQuestion] = [
         question="How have ESC guidelines incorporated GLP-1 RA evidence for ASCVD patients?",
         category="guidelines",
     ),
+    EvalQuestion(
+        qid="q31",
+        question="What magnitude of systolic blood pressure reduction has been observed with semaglutide in cardiovascular outcome trials?",
+        category="outcome",
+    ),
+    EvalQuestion(
+        qid="q32",
+        question="What are the proposed mechanisms by which GLP-1 receptor agonists lower blood pressure independent of weight loss?",
+        category="mechanism",
+    ),
+    EvalQuestion(
+        qid="q33",
+        question="How do GLP-1 receptor agonists affect blood pressure in patients with resistant or treatment-refractory hypertension?",
+        category="population",
+    ),
 ]
