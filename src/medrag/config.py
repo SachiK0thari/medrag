@@ -76,4 +76,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Cached settings accessor — call this everywhere instead of constructing Settings()."""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

@@ -300,7 +300,7 @@ class MedRagAgent:
     # ---- graph ----------------------------------------------------------- #
 
     def _build_graph(self) -> CompiledStateGraph:
-        graph: StateGraph[AgentState] = StateGraph(AgentState)
+        graph = StateGraph(AgentState)
         graph.add_node("decompose", self._decompose_node)
         graph.add_node("retrieve", self._retrieve_node)
         graph.add_node("reflect", self._reflect_node)
@@ -333,6 +333,6 @@ class MedRagAgent:
         }
         final = self._get_graph().invoke(initial)
         answer = final.get("answer")
-        if answer is None:
+        if not isinstance(answer, Answer):
             raise RuntimeError("agent graph terminated without producing an Answer")
         return answer

@@ -142,5 +142,5 @@ def _paper_from_article(art: etree._Element) -> Paper:
         doi=doi,
         mesh_terms=mesh_terms,
         source=PaperSource.PUBMED_ABSTRACT,
-        url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",  # type: ignore[arg-type]
+        url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
     )

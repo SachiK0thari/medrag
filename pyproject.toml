@@ -103,7 +103,7 @@ module = [
     "pinecone.*",
     "groq.*",
     "langgraph.*",
-    "ragas.*",
+    "lxml.*",
 ]
 ignore_missing_imports = true
 
