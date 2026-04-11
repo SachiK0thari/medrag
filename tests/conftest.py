@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
+os.environ.setdefault("PINECONE_API_KEY", "test-pinecone-key")
+
 import pytest
 
 from medrag.models import Paper, PaperSource

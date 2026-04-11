@@ -7,8 +7,8 @@ from pydantic import ValidationError
 
 from medrag.models import (
     Answer,
-    Citation,
     Chunk,
+    Citation,
     Paper,
     PaperSource,
     RetrievalMethod,

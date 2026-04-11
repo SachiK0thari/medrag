@@ -71,9 +71,7 @@ class PubMedClient:
         resp.raise_for_status()
         return _parse_pubmed_xml(resp.content)
 
-    async def fetch_in_batches(
-        self, pmids: list[str], batch_size: int = 100
-    ) -> list[Paper]:
+    async def fetch_in_batches(self, pmids: list[str], batch_size: int = 100) -> list[Paper]:
         """Batch metadata fetches to avoid URL length limits."""
         papers: list[Paper] = []
         for i in range(0, len(pmids), batch_size):
@@ -90,7 +88,7 @@ def _parse_pubmed_xml(xml_bytes: bytes) -> list[Paper]:
     for art in root.iter("PubmedArticle"):
         try:
             papers.append(_paper_from_article(art))
-        except Exception:  # noqa: BLE001 — skip malformed records, log later
+        except Exception:
             continue
     return papers
 
@@ -104,9 +102,7 @@ def _paper_from_article(art: etree._Element) -> Paper:
     title_el = art.find(".//ArticleTitle")
     title = "".join(title_el.itertext()) if title_el is not None else "Untitled"
 
-    abstract_parts = [
-        "".join(el.itertext()) for el in art.findall(".//Abstract/AbstractText")
-    ]
+    abstract_parts = ["".join(el.itertext()) for el in art.findall(".//Abstract/AbstractText")]
     abstract = "\n".join(p for p in abstract_parts if p) or None
 
     authors: list[str] = []
@@ -132,11 +128,7 @@ def _paper_from_article(art: etree._Element) -> Paper:
             pmcid = aid.text
             break
 
-    mesh_terms = [
-        el.text or ""
-        for el in art.findall(".//MeshHeading/DescriptorName")
-        if el.text
-    ]
+    mesh_terms = [el.text or "" for el in art.findall(".//MeshHeading/DescriptorName") if el.text]
 
     return Paper(
         pmid=pmid,

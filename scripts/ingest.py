@@ -1,24 +1,35 @@
 """Ingest GLP-1 / cardiovascular outcome papers from PubMed/PMC into Pinecone.
 
+Pipeline:
+    esearch -> efetch -> (TODO: PMC full text) -> chunk -> embed
+    -> SQLite persistence -> Pinecone upsert
+
 Usage:
-    python scripts/ingest.py [--max-papers 500] [--query "..."]
+    python scripts/ingest.py [--max-papers 500] [--query "..."] [--dry-run]
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 
 from medrag.config import get_settings
 from medrag.ingestion.chunker import chunk_paper
 from medrag.ingestion.embedder import embed_chunks
 from medrag.ingestion.pubmed import PubMedClient
+from medrag.retrieval.dense import DenseRetriever
+from medrag.store import Store
 
 
-async def main(query: str, max_papers: int) -> None:
+async def main(query: str, max_papers: int, dry_run: bool) -> None:
     settings = get_settings()
-    print(f"Settings: index={settings.pinecone_index_name} model={settings.embedding_model}")
+    print(
+        f"Settings: index={settings.pinecone_index_name} "
+        f"model={settings.embedding_model} dry_run={dry_run}"
+    )
     print(f"Query: {query!r}")
+    t0 = time.perf_counter()
 
     async with PubMedClient() as pubmed:
         print("1. esearch ...")
@@ -29,7 +40,16 @@ async def main(query: str, max_papers: int) -> None:
         papers = await pubmed.fetch_in_batches(pmids, batch_size=100)
         print(f"   fetched {len(papers)} papers")
 
-    # TODO(saturday): enrich with PMC full text where pmcid is set
+    if not papers:
+        print("No papers fetched — nothing to do.")
+        return
+
+    # TODO(saturday): PMC full-text enrichment.
+    # async with httpx.AsyncClient(timeout=30.0) as client:
+    #     papers = await enrich_with_full_text(papers, client)
+    n_with_pmcid = sum(1 for p in papers if p.pmcid)
+    print(f"   ({n_with_pmcid} have PMCID — full text skipped until pmc.py lands)")
+
     print("3. chunk ...")
     all_chunks = [c for p in papers for c in chunk_paper(p)]
     print(f"   produced {len(all_chunks)} chunks")
@@ -38,20 +58,44 @@ async def main(query: str, max_papers: int) -> None:
     embedded = embed_chunks(all_chunks)
     print(f"   embedded {len(embedded)} chunks")
 
-    # TODO(saturday): persist papers + chunks to SQLite, upsert vectors to Pinecone
-    print("5. upsert -> Pinecone (TODO)")
-    print("Done.")
+    print("5. persist to SQLite ...")
+    with Store() as store:
+        store.save_papers(papers)
+        store.save_chunks(all_chunks)
+        print(
+            f"   sqlite: {store.count_papers()} papers / "
+            f"{store.count_chunks()} chunks at {settings.sqlite_path}"
+        )
+
+    if dry_run:
+        print("6. Pinecone upsert skipped (--dry-run)")
+    else:
+        print("6. ensure Pinecone index ...")
+        dense = DenseRetriever()
+        dense.ensure_index()
+        print("   upserting vectors ...")
+        n_upserted = dense.upsert(embedded)
+        print(f"   upserted {n_upserted} vectors")
+
+    elapsed = time.perf_counter() - t0
+    print(f"Done in {elapsed:.1f}s.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", default=None)
     parser.add_argument("--max-papers", type=int, default=None)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip Pinecone upsert (still writes SQLite).",
+    )
     args = parser.parse_args()
     settings = get_settings()
     asyncio.run(
         main(
             query=args.query or settings.ingest_topic_query,
             max_papers=args.max_papers or settings.ingest_max_papers,
+            dry_run=args.dry_run,
         )
     )

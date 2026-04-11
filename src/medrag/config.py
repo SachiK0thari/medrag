@@ -8,7 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -69,9 +69,7 @@ class Settings(BaseSettings):
     sqlite_path: Path = DATA_DIR / "medrag.db"
 
     # ---- Ingestion -------------------------------------------------------- #
-    ingest_topic_query: str = (
-        "GLP-1 receptor agonist AND (cardiovascular outcome OR MACE)"
-    )
+    ingest_topic_query: str = "GLP-1 receptor agonist AND (cardiovascular outcome OR MACE)"
     ingest_max_papers: int = 500
 
 

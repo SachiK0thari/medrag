@@ -22,9 +22,7 @@ def _make_rc(chunk_id: str, rank: int, method: RetrievalMethod) -> RetrievedChun
         n_tokens=1,
     )
     paper = Paper(pmid=chunk.pmid, title="t", source=PaperSource.PUBMED_ABSTRACT)
-    return RetrievedChunk(
-        chunk=chunk, paper=paper, score=1.0 / rank, rank=rank, method=method
-    )
+    return RetrievedChunk(chunk=chunk, paper=paper, score=1.0 / rank, rank=rank, method=method)
 
 
 def test_rrf_orders_by_combined_rank() -> None:

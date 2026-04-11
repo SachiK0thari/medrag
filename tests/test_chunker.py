@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from medrag.ingestion.chunker import (
+    _recursive_split,
     chunk_paper,
     estimate_tokens,
-    _recursive_split,
 )
 from medrag.models import Paper
 

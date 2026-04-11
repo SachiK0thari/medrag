@@ -15,8 +15,6 @@ from medrag.models import Paper
 # headers so the chunker can tag section metadata.
 
 
-async def enrich_with_full_text(
-    papers: list[Paper], client: httpx.AsyncClient
-) -> list[Paper]:
+async def enrich_with_full_text(papers: list[Paper], client: httpx.AsyncClient) -> list[Paper]:
     """Fetch PMC JATS XML for papers with a PMCID; return updated Paper list."""
     raise NotImplementedError("implement Saturday morning")
