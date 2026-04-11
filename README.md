@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 license: mit
-short_description: Production-style medical RAG agent grounding LLM answers in GLP-1 cardiovascular literature
+short_description: Agentic RAG over GLP-1 cardiovascular literature
 ---
 
 # MedRAG — Agentic RAG over GLP-1 Cardiovascular Outcome Literature
