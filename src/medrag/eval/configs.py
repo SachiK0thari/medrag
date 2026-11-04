@@ -15,6 +15,10 @@ delta then cleanly attributes to the retriever, not a different prompt.
 Components (store, BM25, dense, reranker, agent) are built lazily and
 shared across configs via `_SharedComponents` so a full eval run only
 loads the corpus and the cross-encoder once.
+
+Agentic ablations: `agentic` is the unmodified v1 loop. Each `agentic_*`
+variant flips exactly one `MedRagAgent` knob so the eval table isolates the
+effect of that change; `agentic_v2` is the combination that ships.
 """
 
 from __future__ import annotations
@@ -62,7 +66,7 @@ class _SharedComponents:
         self._dense: DenseRetriever | None = None
         self._hybrid: HybridRetriever | None = None
         self._reranker: Reranker | None = None
-        self._agent: MedRagAgent | None = None
+        self._agents: dict[tuple[bool, bool, int | None, bool], MedRagAgent] = {}
 
     def store(self) -> Store:
         if self._store is None:
@@ -89,14 +93,32 @@ class _SharedComponents:
             self._reranker = Reranker()
         return self._reranker
 
-    def agent(self) -> MedRagAgent:
-        if self._agent is None:
-            self._agent = MedRagAgent(
+    def agent(
+        self,
+        *,
+        keep_original_query: bool = False,
+        rerank_against_original: bool = False,
+        max_reflection_loops: int | None = None,
+        faithful_decomposition: bool = False,
+    ) -> MedRagAgent:
+        """One agent per knob combination, all sharing the retrieval stack."""
+        key = (
+            keep_original_query,
+            rerank_against_original,
+            max_reflection_loops,
+            faithful_decomposition,
+        )
+        if key not in self._agents:
+            self._agents[key] = MedRagAgent(
                 hybrid=self.hybrid(),
                 reranker=self.reranker(),
                 store=self.store(),
+                keep_original_query=keep_original_query,
+                rerank_against_original=rerank_against_original,
+                max_reflection_loops=max_reflection_loops,
+                faithful_decomposition=faithful_decomposition,
             )
-        return self._agent
+        return self._agents[key]
 
 
 class DenseOnlyConfig:
@@ -153,13 +175,35 @@ class HybridRerankedConfig:
 
 
 class AgenticConfig:
-    name = "agentic"
+    """Full LangGraph loop. Knobs select an ablation variant (see module doc)."""
 
-    def __init__(self, components: _SharedComponents) -> None:
+    def __init__(
+        self,
+        components: _SharedComponents,
+        *,
+        name: str = "agentic",
+        keep_original_query: bool = False,
+        rerank_against_original: bool = False,
+        max_reflection_loops: int | None = None,
+        faithful_decomposition: bool = False,
+    ) -> None:
+        self.name = name
         self._c = components
+        self._keep_original_query = keep_original_query
+        self._rerank_against_original = rerank_against_original
+        self._max_reflection_loops = max_reflection_loops
+        self._faithful_decomposition = faithful_decomposition
+
+    def agent(self) -> MedRagAgent:
+        return self._c.agent(
+            keep_original_query=self._keep_original_query,
+            rerank_against_original=self._rerank_against_original,
+            max_reflection_loops=self._max_reflection_loops,
+            faithful_decomposition=self._faithful_decomposition,
+        )
 
     def run(self, question: str) -> EvalResult:
-        retrieved, answer = self._c.agent().run(question)
+        retrieved, answer = self.agent().run(question)
         return EvalResult(retrieved=retrieved, answer=answer)
 
 
@@ -171,6 +215,40 @@ def build_all_configs() -> list[EvalConfig]:
         BM25OnlyConfig(components),
         HybridRRFConfig(components),
         HybridRerankedConfig(components),
+        # v1 baseline — unmodified loop.
         AgenticConfig(components),
+        # One-knob ablations.
+        AgenticConfig(components, name="agentic_keep_orig", keep_original_query=True),
+        AgenticConfig(components, name="agentic_rerank_orig", rerank_against_original=True),
+        AgenticConfig(components, name="agentic_no_reflect", max_reflection_loops=0),
+        AgenticConfig(components, name="agentic_faithful", faithful_decomposition=True),
+        # Shipping candidate.
+        AgenticConfig(
+            components,
+            name="agentic_v2",
+            keep_original_query=True,
+            rerank_against_original=True,
+            faithful_decomposition=True,
+        ),
     ]
     return configs
+
+
+def config_names() -> list[str]:
+    return [c.name for c in build_all_configs()]
+
+
+def build_configs(names: list[str] | None = None) -> list[EvalConfig]:
+    """Instantiate the named configs (all when `names` is None).
+
+    Raises ValueError on an unknown name so a typo in `--configs` fails fast
+    instead of silently running nothing.
+    """
+    all_configs = build_all_configs()
+    if names is None:
+        return all_configs
+    by_name = {c.name: c for c in all_configs}
+    unknown = [n for n in names if n not in by_name]
+    if unknown:
+        raise ValueError(f"unknown config(s): {unknown}; choose from {sorted(by_name)}")
+    return [by_name[n] for n in names]

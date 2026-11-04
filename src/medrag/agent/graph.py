@@ -7,6 +7,24 @@ State machine:
 reflect node can append a follow-up sub-query and loop without re-running
 anything. Accumulated `RetrievedChunk`s are deduped by chunk_id and kept in
 rerank-score order so the answer node can slice the top-N directly.
+
+Ablation knobs (all default to the original v1 behaviour so the ``agentic``
+eval row stays a true baseline):
+
+- ``keep_original_query``: always search the user's question verbatim as the
+  first sub-query. v1 only searched the LLM's paraphrased sub-queries, which
+  drops exact tokens (trial acronyms, drug names) that BM25 relies on.
+- ``rerank_against_original``: after merging sub-query results, re-score the
+  whole pool with the cross-encoder against the *original question*. v1 sorted
+  the merged pool by per-sub-query rerank scores, which are not comparable
+  across sub-queries, so chunks matching a tangential sub-query could outrank
+  chunks matching the actual question.
+- ``max_reflection_loops``: override the settings value (0 disables reflect).
+- ``faithful_decomposition``: use the v2 planner prompt that keeps named
+  entities verbatim and returns a single sub-query for atomic questions.
+
+Every run records a per-sub-query ``trace`` (which PMIDs each sub-query
+surfaced) so regressions can be attributed to a specific planner output.
 """
 
 from __future__ import annotations
@@ -22,6 +40,7 @@ from medrag.agent.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER_TEMPLATE,
     DECOMPOSE_SYSTEM,
+    DECOMPOSE_SYSTEM_FAITHFUL,
     REFLECT_SYSTEM,
 )
 from medrag.config import get_settings
@@ -44,6 +63,9 @@ if TYPE_CHECKING:
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 
 
+TraceEntry = dict[str, object]
+
+
 class AgentState(TypedDict, total=False):
     question: str
     sub_queries: list[SubQuery]
@@ -53,6 +75,7 @@ class AgentState(TypedDict, total=False):
     needs_more: bool
     missing: str
     answer: Answer
+    trace: list[TraceEntry]
 
 
 # --------------------------------------------------------------------------- #
@@ -180,6 +203,21 @@ def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     return out
 
 
+def _unique_pmids(chunks: list[RetrievedChunk], limit: int = 10) -> list[str]:
+    """First `limit` distinct PMIDs in rank order (mirrors the eval harness)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for rc in chunks:
+        pmid = rc.paper.pmid
+        if pmid in seen:
+            continue
+        seen.add(pmid)
+        out.append(pmid)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def generate_answer(
     question: str,
     retrieved: list[RetrievedChunk],
@@ -227,12 +265,26 @@ class MedRagAgent:
         hybrid: HybridRetriever | None = None,
         reranker: Reranker | None = None,
         store: Store | None = None,
+        keep_original_query: bool = False,
+        rerank_against_original: bool = False,
+        max_reflection_loops: int | None = None,
+        faithful_decomposition: bool = False,
     ) -> None:
         self._settings = get_settings()
         self._store = store
         self._hybrid = hybrid
         self._reranker = reranker
         self._graph: CompiledStateGraph | None = None
+        self._keep_original_query = keep_original_query
+        self._rerank_against_original = rerank_against_original
+        self._max_reflection_loops = (
+            max_reflection_loops
+            if max_reflection_loops is not None
+            else self._settings.max_reflection_loops
+        )
+        self._decompose_system = (
+            DECOMPOSE_SYSTEM_FAITHFUL if faithful_decomposition else DECOMPOSE_SYSTEM
+        )
 
     # ---- lazy component wiring ------------------------------------------ #
 
@@ -258,13 +310,24 @@ class MedRagAgent:
     # ---- nodes ----------------------------------------------------------- #
 
     def _decompose_node(self, state: AgentState) -> AgentState:
-        resp = llm.complete(DECOMPOSE_SYSTEM, state["question"])
-        sub_queries = _parse_sub_queries(
-            resp.text,
-            fallback=state["question"],
-            limit=self._settings.max_subqueries,
-        )
-        return {"sub_queries": sub_queries}
+        question = state["question"]
+        limit = self._settings.max_subqueries
+        resp = llm.complete(self._decompose_system, question)
+        sub_queries = _parse_sub_queries(resp.text, fallback=question, limit=limit)
+        if self._keep_original_query:
+            original = SubQuery(text=question, rationale="original question, searched verbatim")
+            rest = [sq for sq in sub_queries if sq.text.strip().lower() != question.strip().lower()]
+            sub_queries = [original, *rest][:limit]
+        trace: list[TraceEntry] = [
+            {
+                "step": "decompose",
+                "prompt": "faithful"
+                if self._decompose_system is DECOMPOSE_SYSTEM_FAITHFUL
+                else "v1",
+                "sub_queries": [sq.text for sq in sub_queries],
+            }
+        ]
+        return {"sub_queries": sub_queries, "trace": trace}
 
     def _retrieve_node(self, state: AgentState) -> AgentState:
         hybrid = self._get_hybrid()
@@ -272,24 +335,47 @@ class MedRagAgent:
         already = state.get("n_retrieval_calls", 0)
         pending = state["sub_queries"][already:]
 
+        trace = list(state.get("trace", []))
         new_chunks: list[RetrievedChunk] = []
         for sq in pending:
             fused = hybrid.search(sq.text)
             if not fused:
+                trace.append({"step": "retrieve", "sub_query": sq.text, "top_pmids": []})
                 continue
             reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
             new_chunks.extend(reranked)
+            trace.append(
+                {
+                    "step": "retrieve",
+                    "sub_query": sq.text,
+                    "top_pmids": _unique_pmids(reranked),
+                }
+            )
 
         merged = _dedupe_by_chunk_id(state.get("retrieved", []) + new_chunks)
-        merged.sort(key=lambda rc: rc.score, reverse=True)
+        if self._rerank_against_original and merged:
+            # Re-score the whole accumulated pool against the user's question so
+            # chunks from different sub-queries are ranked on a common scale.
+            merged = reranker.rerank(state["question"], merged, len(merged))
+        else:
+            merged.sort(key=lambda rc: rc.score, reverse=True)
+        trace.append(
+            {
+                "step": "merge",
+                "n_chunks": len(merged),
+                "rerank_against_original": self._rerank_against_original,
+                "top_pmids": _unique_pmids(merged),
+            }
+        )
         return {
             "retrieved": merged,
             "n_retrieval_calls": already + len(pending),
+            "trace": trace,
         }
 
     def _reflect_node(self, state: AgentState) -> AgentState:
         loops = state.get("reflection_loops", 0)
-        if loops >= self._settings.max_reflection_loops:
+        if loops >= self._max_reflection_loops:
             return {"needs_more": False, "missing": "", "reflection_loops": loops + 1}
 
         top = state.get("retrieved", [])[: self._settings.rerank_top_k]
@@ -299,10 +385,15 @@ class MedRagAgent:
         user = f"Question: {state['question']}\n\nSources:\n{_render_sources(top)}"
         resp = llm.complete(REFLECT_SYSTEM, user, max_tokens=256)
         sufficient, missing = _parse_reflection(resp.text)
+        trace = [
+            *state.get("trace", []),
+            {"step": "reflect", "sufficient": sufficient, "missing": missing},
+        ]
         return {
             "needs_more": (not sufficient) and bool(missing),
             "missing": missing,
             "reflection_loops": loops + 1,
+            "trace": trace,
         }
 
     def _followup_node(self, state: AgentState) -> AgentState:
@@ -347,7 +438,7 @@ class MedRagAgent:
     # ---- public API ------------------------------------------------------ #
 
     def answer(self, question: str) -> Answer:
-        _, answer = self._invoke(question)
+        _, answer, _ = self._invoke(question)
         return answer
 
     def retrieve_for_eval(self, question: str) -> list[RetrievedChunk]:
@@ -356,7 +447,7 @@ class MedRagAgent:
         Used by the eval harness to score the agentic config on the same
         retrieval metrics (recall@k, MRR, nDCG) as the non-agentic baselines.
         """
-        retrieved, _ = self._invoke(question)
+        retrieved, _, _ = self._invoke(question)
         return retrieved
 
     def run(self, question: str) -> tuple[list[RetrievedChunk], Answer]:
@@ -365,9 +456,16 @@ class MedRagAgent:
         Single public entry point for the eval harness, which needs both
         halves to compute retrieval metrics AND faithfulness / cost.
         """
+        retrieved, answer, _ = self._invoke(question)
+        return retrieved, answer
+
+    def run_with_trace(
+        self, question: str
+    ) -> tuple[list[RetrievedChunk], Answer, list[TraceEntry]]:
+        """Like `run`, plus the per-step trace (sub-queries and PMIDs each found)."""
         return self._invoke(question)
 
-    def _invoke(self, question: str) -> tuple[list[RetrievedChunk], Answer]:
+    def _invoke(self, question: str) -> tuple[list[RetrievedChunk], Answer, list[TraceEntry]]:
         initial: AgentState = {
             "question": question,
             "sub_queries": [],
@@ -376,9 +474,10 @@ class MedRagAgent:
             "reflection_loops": 0,
             "needs_more": False,
             "missing": "",
+            "trace": [],
         }
         final = self._get_graph().invoke(initial)
         answer = final.get("answer")
         if not isinstance(answer, Answer):
             raise RuntimeError("agent graph terminated without producing an Answer")
-        return list(final.get("retrieved", [])), answer
+        return list(final.get("retrieved", [])), answer, list(final.get("trace", []))

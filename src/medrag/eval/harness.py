@@ -1,12 +1,14 @@
 """Eval harness: runs the question set under multiple retrieval configs
 and writes a CSV results table.
 
-Configs benchmarked:
+Configs benchmarked (see `medrag.eval.configs`):
     - dense_only       (baseline: Pinecone only, no rerank)
     - bm25_only        (sparse baseline)
     - hybrid_rrf       (BM25 + dense, RRF fused)
     - hybrid_reranked  (RRF + bge cross-encoder rerank)
-    - agentic          (full LangGraph loop with decompose + reflect)
+    - agentic          (v1 LangGraph loop: decompose + reflect, unmodified)
+    - agentic_*        (one-knob ablations of the loop)
+    - agentic_v2       (shipping combination)
 
 Per question and per config we record:
     - recall@10, MRR, nDCG@10 — retrieval quality vs gold PMIDs
@@ -29,7 +31,6 @@ from pathlib import Path
 from medrag.agent import llm
 from medrag.config import get_settings
 from medrag.eval.configs import EvalConfig
-from medrag.eval.faithfulness import compute_faithfulness
 from medrag.eval.metrics import (
     aggregate,
     mean_reciprocal_rank,
@@ -114,6 +115,10 @@ def evaluate_config(
     config: EvalConfig,
     questions: list[EvalQuestion],
 ) -> list[EvalRow]:
+    # Imported here so the harness (and its unit tests) load without the
+    # optional `eval` extra; ragas is only needed when a question is scored.
+    from medrag.eval.faithfulness import compute_faithfulness
+
     rows: list[EvalRow] = []
     skipped = 0
 
@@ -225,14 +230,14 @@ def summarize(rows: list[EvalRow]) -> dict[str, dict[str, float]]:
     return summary
 
 
-def run_all(configs: list[EvalConfig]) -> None:
+def run_all(configs: list[EvalConfig], out_path: Path | None = None) -> None:
     settings = get_settings()
     all_rows: list[EvalRow] = []
     for cfg in configs:
         print(f"Evaluating {cfg.name}...")
         all_rows.extend(evaluate_config(cfg, QUESTIONS))
 
-    out_path = settings.data_dir / "eval_results.csv"
+    out_path = out_path or settings.data_dir / "eval_results.csv"
     write_results(all_rows, out_path)
     print(f"\nWrote {len(all_rows)} rows to {out_path}")
 
