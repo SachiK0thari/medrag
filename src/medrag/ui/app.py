@@ -27,7 +27,7 @@ with st.sidebar:
     st.header("About")
     st.markdown(
         "**Stack:** PubMed/PMC · bge embeddings · Pinecone · BM25 + RRF · "
-        "bge-reranker · LangGraph · Llama 3.3 70B (Groq)\n\n"
+        "bge-reranker · LangGraph · DeepSeek V4.1 Flash (OpenRouter)\n\n"
         "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 30 curated questions.\n\n"
         "[Source on GitHub](https://github.com/yourusername/medrag)"
     )

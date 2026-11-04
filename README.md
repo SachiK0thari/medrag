@@ -54,17 +54,19 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
 ## Evaluation
 
 Held-out question set of 30 expert-curated GLP-1 / cardiovascular questions,
-each tagged with gold-standard PMIDs. Four configurations benchmarked:
+each tagged with gold-standard PMIDs. Five configurations benchmarked:
 
-| Config | Recall@10 | nDCG@10 | RAGAS faithfulness | p50 latency | $/query |
-|---|---|---|---|---|---|
-| Dense only (baseline) | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| BM25 only | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Hybrid (RRF) | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Hybrid + rerank | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| **Full agentic loop** | **_TBD_** | **_TBD_** | **_TBD_** | _TBD_ | _TBD_ |
+| Config | Recall@10 | nDCG@10 | RAGAS faithfulness | $/query |
+|---|---|---|---|---|
+| Dense only (baseline) | 0.472 | 0.327 | — | $0.0001 |
+| BM25 only | 0.744 | 0.485 | — | $0.0001 |
+| Hybrid (RRF) | 0.717 | 0.561 | — | $0.0001 |
+| Hybrid + rerank | 0.733 | 0.502 | — | $0.0001 |
+| **Full agentic loop** | **0.417** | **0.268** | — | $0.0002 |
 
-> Numbers populated by `make eval` after running the held-out set.
+> Evaluated with `llama-3.1-8b-instant` on Groq free tier (6K TPM), before the switch to OpenRouter.
+> Faithfulness scoring requires a larger model (70B+) — marked "—" for this run.
+> Re-run with `make eval` (now defaulting to `deepseek/deepseek-v4.1-flash` via OpenRouter) to populate all columns.
 > See [`scripts/run_eval.py`](scripts/run_eval.py) and the harness in
 > [`src/medrag/eval/`](src/medrag/eval/).
 
@@ -77,15 +79,15 @@ each tagged with gold-standard PMIDs. Four configurations benchmarked:
 | Vector DB | Pinecone (serverless) | Production-grade, free tier sufficient |
 | Sparse | `rank_bm25` | Pure Python, zero deps |
 | Rerank | `BAAI/bge-reranker-v2-m3` (local) | Cross-encoder precision boost |
-| LLM | Llama 3.3 70B via Groq | Sub-second TTFT, free tier, swappable |
+| LLM | DeepSeek V4.1 Flash via OpenRouter | Cheap, fast, any OpenRouter model id via `LLM_MODEL` |
 | Orchestration | LangGraph | Explicit state machine for agent loop |
 | API | FastAPI + Pydantic | Type-safe contracts end to end |
 | UI | Streamlit | Fast to ship, deploys to HF Spaces |
-| Eval | Custom harness + RAGAS | Recall@k, nDCG, faithfulness, LLM-as-judge |
+| Eval | Custom harness (claim-level faithfulness) | Recall@k, nDCG, faithfulness, LLM-as-judge |
 | Quality | ruff + mypy strict + pytest + GH Actions | Production-grade discipline |
 
-The LLM client (`medrag.agent.llm`) is abstracted: swap Groq for Anthropic Claude
-or OpenAI GPT-4o via a single environment variable.
+The LLM client (`medrag.agent.llm`) talks to OpenRouter's OpenAI-compatible API, so
+swapping to Claude, GPT, Llama, etc. is a one-line `LLM_MODEL` change.
 
 ## Quickstart
 
@@ -98,7 +100,7 @@ make dev   # installs with dev + eval extras, sets up pre-commit
 
 # 2. Configure
 cp .env.example .env
-# Edit .env with your Groq, Pinecone, and (optional) NCBI API keys
+# Edit .env with your OpenRouter, Pinecone, and (optional) NCBI API keys
 
 # 3. Ingest
 make ingest        # ~10-15 min for 500 papers on a laptop

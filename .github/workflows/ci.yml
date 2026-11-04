@@ -38,6 +38,6 @@ jobs:
 
       - name: Pytest
         env:
-          GROQ_API_KEY: dummy
+          OPENROUTER_API_KEY: dummy
           PINECONE_API_KEY: dummy
         run: pytest -m "not integration"

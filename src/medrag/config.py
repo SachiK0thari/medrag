@@ -26,13 +26,16 @@ class Settings(BaseSettings):
     )
 
     # ---- Secrets ---------------------------------------------------------- #
-    groq_api_key: SecretStr
+    openrouter_api_key: SecretStr
     pinecone_api_key: SecretStr
     ncbi_api_key: SecretStr | None = None  # raises rate limit 3 -> 10 req/s
     ncbi_email: str = "you@example.com"  # NCBI asks for a contact email
 
     # ---- LLM -------------------------------------------------------------- #
-    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    llm_model: str = "deepseek/deepseek-v4.1-flash"  # any OpenRouter model id
+    llm_reasoning_enabled: bool = False  # OpenRouter `reasoning: {enabled: true}`
+    llm_throttle_s: float = 0.0  # min seconds between LLM calls (0 = off)
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
 

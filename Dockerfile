@@ -19,6 +19,20 @@ COPY src ./src
 
 RUN pip install --upgrade pip && pip install -e .
 
+# Pre-download embedding + reranker models so first request isn't a cold start
+RUN python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+SentenceTransformer('BAAI/bge-small-en-v1.5'); \
+CrossEncoder('BAAI/bge-reranker-v2-m3')"
+
+# Writable cache/data dirs for HF Spaces (repo dir is read-only)
+ENV HF_HOME=/tmp/hf_cache \
+    TRANSFORMERS_CACHE=/tmp/hf_cache \
+    SENTENCE_TRANSFORMERS_HOME=/tmp/hf_cache \
+    DATA_DIR=/tmp/medrag \
+    SQLITE_PATH=/tmp/medrag/medrag.db
+RUN mkdir -p /tmp/hf_cache /tmp/medrag
+
 # HF Spaces expects port 7860
 ENV PORT=7860
 EXPOSE 7860

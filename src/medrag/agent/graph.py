@@ -180,6 +180,39 @@ def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     return out
 
 
+def generate_answer(
+    question: str,
+    retrieved: list[RetrievedChunk],
+    *,
+    top_k: int | None = None,
+    sub_queries: list[SubQuery] | None = None,
+    n_retrieval_calls: int = 1,
+) -> Answer:
+    """Single-pass answer generation over a fixed retrieval.
+
+    Shared by the agent's `_answer_node` and the eval harness: using the same
+    prompt + citation logic for every config isolates retrieval quality as the
+    only independent variable when comparing faithfulness across baselines.
+    """
+    settings = get_settings()
+    k = top_k if top_k is not None else settings.rerank_top_k
+    top = retrieved[:k]
+    sources_str = _render_sources(top)
+    user = ANSWER_USER_TEMPLATE.format(question=question, sources=sources_str)
+    resp = llm.complete(ANSWER_SYSTEM, user)
+    text = resp.text.strip()
+    citations = _extract_citations(text, top)
+    return Answer(
+        question=question,
+        text=text,
+        citations=citations,
+        sub_queries=list(sub_queries) if sub_queries else [],
+        confidence=_confidence(citations, top),
+        n_retrieval_calls=max(n_retrieval_calls, 1),
+        total_chunks_considered=len(retrieved),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Agent                                                                        #
 # --------------------------------------------------------------------------- #
@@ -280,20 +313,12 @@ class MedRagAgent:
         return {"sub_queries": state["sub_queries"] + [follow_up]}
 
     def _answer_node(self, state: AgentState) -> AgentState:
-        top = state.get("retrieved", [])[: self._settings.rerank_top_k]
-        sources_str = _render_sources(top)
-        user = ANSWER_USER_TEMPLATE.format(question=state["question"], sources=sources_str)
-        resp = llm.complete(ANSWER_SYSTEM, user)
-        text = resp.text.strip()
-        citations = _extract_citations(text, top)
-        answer = Answer(
+        answer = generate_answer(
             question=state["question"],
-            text=text,
-            citations=citations,
+            retrieved=state.get("retrieved", []),
+            top_k=self._settings.rerank_top_k,
             sub_queries=state.get("sub_queries", []),
-            confidence=_confidence(citations, top),
-            n_retrieval_calls=max(state.get("n_retrieval_calls", 1), 1),
-            total_chunks_considered=len(state.get("retrieved", [])),
+            n_retrieval_calls=state.get("n_retrieval_calls", 1),
         )
         return {"answer": answer}
 
@@ -322,6 +347,27 @@ class MedRagAgent:
     # ---- public API ------------------------------------------------------ #
 
     def answer(self, question: str) -> Answer:
+        _, answer = self._invoke(question)
+        return answer
+
+    def retrieve_for_eval(self, question: str) -> list[RetrievedChunk]:
+        """Run the full agent loop and return the retrieved chunks only.
+
+        Used by the eval harness to score the agentic config on the same
+        retrieval metrics (recall@k, MRR, nDCG) as the non-agentic baselines.
+        """
+        retrieved, _ = self._invoke(question)
+        return retrieved
+
+    def run(self, question: str) -> tuple[list[RetrievedChunk], Answer]:
+        """Run the full agent loop and return both retrieval and answer.
+
+        Single public entry point for the eval harness, which needs both
+        halves to compute retrieval metrics AND faithfulness / cost.
+        """
+        return self._invoke(question)
+
+    def _invoke(self, question: str) -> tuple[list[RetrievedChunk], Answer]:
         initial: AgentState = {
             "question": question,
             "sub_queries": [],
@@ -335,4 +381,4 @@ class MedRagAgent:
         answer = final.get("answer")
         if not isinstance(answer, Answer):
             raise RuntimeError("agent graph terminated without producing an Answer")
-        return answer
+        return list(final.get("retrieved", [])), answer

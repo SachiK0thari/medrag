@@ -29,7 +29,7 @@ dependencies = [
     "rank-bm25>=0.2.2,<0.3",
 
     # LLM + agent
-    "groq>=0.11,<1",
+    "openai>=1.50,<3",
     "langgraph>=0.2,<0.3",
 
     # Storage
@@ -101,8 +101,9 @@ module = [
     "rank_bm25.*",
     "sentence_transformers.*",
     "pinecone.*",
-    "groq.*",
     "langgraph.*",
+    "ragas.*",
+    "langchain_openai.*",
     "lxml.*",
 ]
 ignore_missing_imports = true

@@ -14,9 +14,12 @@ import argparse
 import asyncio
 import time
 
+import httpx
+
 from medrag.config import get_settings
 from medrag.ingestion.chunker import chunk_paper
 from medrag.ingestion.embedder import embed_chunks
+from medrag.ingestion.pmc import enrich_with_full_text
 from medrag.ingestion.pubmed import PubMedClient
 from medrag.retrieval.dense import DenseRetriever
 from medrag.store import Store
@@ -44,11 +47,12 @@ async def main(query: str, max_papers: int, dry_run: bool) -> None:
         print("No papers fetched — nothing to do.")
         return
 
-    # TODO(saturday): PMC full-text enrichment.
-    # async with httpx.AsyncClient(timeout=30.0) as client:
-    #     papers = await enrich_with_full_text(papers, client)
     n_with_pmcid = sum(1 for p in papers if p.pmcid)
-    print(f"   ({n_with_pmcid} have PMCID — full text skipped until pmc.py lands)")
+    print(f"2b. PMC full-text enrichment ({n_with_pmcid} candidates) ...")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        papers = await enrich_with_full_text(papers, client)
+    n_full = sum(1 for p in papers if p.has_full_text)
+    print(f"   enriched {n_full} papers with PMC body text")
 
     print("3. chunk ...")
     all_chunks = [c for p in papers for c in chunk_paper(p)]

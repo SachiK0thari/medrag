@@ -119,12 +119,25 @@ class DenseRetriever:
         if not vectors:
             return []
 
-        response = self._get_index().query(
-            vector=vectors[0],
-            top_k=top_k,
-            include_values=False,
-            include_metadata=False,
+        # Retry transient Pinecone connection errors (free-tier cold starts, etc.)
+        from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+        from urllib3.exceptions import ProtocolError
+
+        @retry(
+            retry=retry_if_exception_type((ProtocolError, ConnectionError)),
+            stop=stop_after_attempt(3),
+            wait=wait_fixed(5),
+            reraise=True,
         )
+        def _query() -> Any:  # noqa: ANN401 — pinecone QueryResponse shape varies by SDK
+            return self._get_index().query(
+                vector=vectors[0],
+                top_k=top_k,
+                include_values=False,
+                include_metadata=False,
+            )
+
+        response = _query()
         matches: list[Any] = list(
             response.get("matches", []) if isinstance(response, dict) else response.matches
         )

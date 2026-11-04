@@ -68,8 +68,8 @@ for the cost of one extra forward pass on the top-30 candidates. Cheap quality w
 nodes. Decompose → retrieve → reflect → answer captures the "innovative algorithm"
 framing without being magic.
 
-**Groq + Llama 3.3 70B.** Free, fast (sub-second TTFT), and the LLM client is
-abstracted so swapping to Claude or GPT-4o is one config change.
+**OpenRouter + DeepSeek V4.1 Flash.** Cheap, fast, and the client speaks the
+OpenAI-compatible API, so swapping to Claude or GPT is one `LLM_MODEL` change.
 
 **Pinecone.** Recognizable on a resume, free tier handles this corpus, serverless
 spin-up matches a real production deployment.
@@ -97,7 +97,7 @@ spin-up matches a real production deployment.
 | `medrag.retrieval.dense` | Pinecone client |
 | `medrag.retrieval.hybrid` | RRF fusion |
 | `medrag.retrieval.reranker` | Cross-encoder rerank |
-| `medrag.agent.llm` | Groq wrapper, token tracking |
+| `medrag.agent.llm` | OpenRouter wrapper, token + cost tracking |
 | `medrag.agent.prompts` | Versioned prompt templates |
 | `medrag.agent.graph` | LangGraph state machine |
 | `medrag.eval.metrics` | Recall@k, MRR, nDCG |
