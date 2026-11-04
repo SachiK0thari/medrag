@@ -17,12 +17,12 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 > manual literature review to a 15-second cited answer** over 500+ open-access
 > papers on GLP-1 receptor agonists and cardiovascular outcomes.
 
-[![ci](https://github.com/yourusername/medrag/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/medrag/actions/workflows/ci.yml)
+[![ci](https://github.com/SachiK0thari/medrag/actions/workflows/ci.yml/badge.svg)](https://github.com/SachiK0thari/medrag/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11-blue)](https://www.python.org)
 [![ruff](https://img.shields.io/badge/lint-ruff-orange)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/types-mypy%20strict-blue)](https://mypy-lang.org)
 
-**Live demo:** _(Hugging Face Spaces link goes here after deployment)_
+**Live demo:** [huggingface.co/spaces/SachiK/medrag](https://huggingface.co/spaces/SachiK/medrag)
 
 ---
 
@@ -53,8 +53,10 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
 
 ## Evaluation
 
-Held-out question set of 30 expert-curated GLP-1 / cardiovascular questions,
-each tagged with gold-standard PMIDs. Five configurations benchmarked:
+Held-out set of 30 GLP-1 / cardiovascular questions (33 authored, 3 dropped
+for lack of an in-corpus answer). Gold PMIDs were LLM-curated from a BM25
+candidate pool and manually spot-checked (see `scripts/curate_gold.py`).
+Five configurations benchmarked:
 
 | Config | Recall@10 | nDCG@10 | RAGAS faithfulness | $/query |
 |---|---|---|---|---|
@@ -93,7 +95,7 @@ swapping to Claude, GPT, Llama, etc. is a one-line `LLM_MODEL` change.
 
 ```bash
 # 1. Install
-git clone https://github.com/yourusername/medrag.git
+git clone https://github.com/SachiK0thari/medrag.git
 cd medrag
 python -m venv .venv && source .venv/bin/activate
 make dev   # installs with dev + eval extras, sets up pre-commit
@@ -151,10 +153,7 @@ medrag/
 ## Roadmap
 
 - [ ] Cost vs quality embedding ablation (`bge-small` vs OpenAI `text-embedding-3-large`)
-- [ ] Replace Streamlit with Next.js + shadcn frontend
-- [ ] Langfuse self-hosted tracing
 - [ ] Multi-topic ingestion (extend beyond GLP-1 / CV)
-- [ ] Confidence calibration via LLM-as-judge ensemble
 
 ## License
 

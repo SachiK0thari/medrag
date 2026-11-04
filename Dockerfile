@@ -27,7 +27,6 @@ CrossEncoder('BAAI/bge-reranker-v2-m3')"
 
 # Writable cache/data dirs for HF Spaces (repo dir is read-only)
 ENV HF_HOME=/tmp/hf_cache \
-    TRANSFORMERS_CACHE=/tmp/hf_cache \
     SENTENCE_TRANSFORMERS_HOME=/tmp/hf_cache \
     DATA_DIR=/tmp/medrag \
     SQLITE_PATH=/tmp/medrag/medrag.db

@@ -43,9 +43,8 @@ from medrag.eval.questions import QUESTIONS
 from medrag.retrieval.bm25 import BM25Retriever
 from medrag.store import Store
 
-# Pacing was tuned for Groq's free-tier TPM window. OpenRouter paid models
-# are far more permissive, so the gap is now short; the 429 backoff stays
-# as a safety net. Each request is ~2500 tokens (system + question + 15
+# Pacing: OpenRouter paid models are permissive, so the inter-request gap
+# is short; the 429 backoff stays as a safety net. Each request is ~2500 tokens (system + question + 15
 # abstracts @ 500 chars) + ~300 output.
 CANDIDATE_POOL_SIZE = 15
 ABSTRACT_MAX_CHARS = 500
@@ -166,7 +165,7 @@ def write_gold_module(gold: dict[str, list[str]], reasoning: dict[str, str]) -> 
         "dict records the LLM's one-line justification per question and is kept",
         "for audit / review.",
         "",
-        "Curation method: BM25 top-15 candidates → Llama 3.3 70B filter. Weak",
+        "Curation method: BM25 top-15 candidates → LLM filter (``LLM_MODEL``). Weak",
         "supervision, not ground truth — spot-check before publication.",
         '"""',
         "",

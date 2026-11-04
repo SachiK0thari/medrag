@@ -25,7 +25,6 @@ class EvalQuestion(BaseModel):
     notes: str | None = None
 
 
-# Seed list — fill gold_pmids after curation Sunday morning.
 QUESTIONS: list[EvalQuestion] = [
     EvalQuestion(
         qid="q01",

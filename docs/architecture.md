@@ -26,7 +26,7 @@
                  │                  Query time (online)                 │
                  │                                                     │
    user question │     ┌──────────────┐                                 │
-        ─────────┼────▶│  decompose   │  Llama 3.3 70B → sub-queries    │
+        ─────────┼────▶│  decompose   │  LLM planner → sub-queries      │
                  │     └──────┬───────┘                                 │
                  │            ▼                                         │
                  │     ┌──────────────┐  parallel per sub-query         │
@@ -54,8 +54,7 @@ predictable, gives MeSH terms for free, and PMC OA gives clean full-text XML
 without PDF parsing pain. Aligns with how a real medical-affairs tool would be built.
 
 **bge-small-en-v1.5 embeddings.** 384-dim, runs on CPU, top of MTEB at its size
-class, no API cost. Demonstrates cost-aware engineering for the
-"computational efficiency" line in the JD.
+class, no API cost. Keeps the per-query cost floor at the LLM calls alone.
 
 **Hybrid retrieval (BM25 + dense + RRF).** Dense alone misses exact-match queries
 (drug names, trial acronyms like LEADER, SUSTAIN-6). Sparse alone misses paraphrase.
@@ -74,14 +73,11 @@ OpenAI-compatible API, so swapping to Claude or GPT is one `LLM_MODEL` change.
 **Pinecone.** Recognizable on a resume, free tier handles this corpus, serverless
 spin-up matches a real production deployment.
 
-## Optimization story (numbers will be filled in after Sunday eval)
+## Benchmarks
 
-| Stage | Change | Latency p50 | Cost / query | Recall@10 |
-|---|---|---|---|---|
-| Baseline | Naive dense retrieval | TBD | TBD | TBD |
-| + Hybrid | BM25 + dense + RRF | TBD | TBD | TBD |
-| + Rerank | bge-reranker-v2-m3 | TBD | TBD | TBD |
-| + Agentic | Decompose + reflect loop | TBD | TBD | TBD |
+Per-config retrieval quality, faithfulness, cost and latency are in the
+Evaluation section of the README. Per-question rows are written to
+`data/eval_results.csv` by `make eval`.
 
 ## Module map
 

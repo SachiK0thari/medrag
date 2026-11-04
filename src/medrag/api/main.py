@@ -43,7 +43,5 @@ def health() -> HealthResponse:
 def ask(req: AskRequest) -> Answer:
     try:
         return get_agent().answer(req.question)
-    except NotImplementedError as e:
-        raise HTTPException(status_code=501, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

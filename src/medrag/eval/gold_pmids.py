@@ -5,7 +5,7 @@ overriding a specific question — re-run the script instead. The `NOTES`
 dict records the LLM's one-line justification per question and is kept
 for audit / review.
 
-Curation method: BM25 top-15 candidates → Llama 3.3 70B filter. Weak
+Curation method: BM25 top-15 candidates → LLM filter (``LLM_MODEL``). Weak
 supervision, not ground truth — spot-check before publication.
 """
 

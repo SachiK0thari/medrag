@@ -28,8 +28,8 @@ with st.sidebar:
     st.markdown(
         "**Stack:** PubMed/PMC · bge embeddings · Pinecone · BM25 + RRF · "
         "bge-reranker · LangGraph · DeepSeek V4.1 Flash (OpenRouter)\n\n"
-        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 30 curated questions.\n\n"
-        "[Source on GitHub](https://github.com/yourusername/medrag)"
+        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 30 held-out questions.\n\n"
+        "[Source on GitHub](https://github.com/SachiK0thari/medrag)"
     )
     st.divider()
     st.subheader("Example questions")
@@ -58,13 +58,9 @@ question = st.text_input(
 if st.button("Search", type="primary", disabled=not question):
     with st.spinner("Running agentic retrieval..."):
         t0 = time.perf_counter()
-        try:
-            agent = load_agent()
-            answer = agent.answer(question)
-            latency_s = time.perf_counter() - t0
-        except NotImplementedError:
-            st.warning("Agent not yet implemented — finish Saturday-evening tasks first.")
-            st.stop()
+        agent = load_agent()
+        answer = agent.answer(question)
+        latency_s = time.perf_counter() - t0
 
     col_main, col_meta = st.columns([3, 1])
     with col_main:
