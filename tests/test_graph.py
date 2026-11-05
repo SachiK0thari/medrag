@@ -133,8 +133,21 @@ def scripted_llm(monkeypatch: pytest.MonkeyPatch):
     return _install
 
 
+_LEGACY_V1 = {
+    "keep_original_query": False,
+    "rerank_against_original": False,
+    "faithful_decomposition": False,
+}
+
+
 def _agent(hybrid: FakeHybrid, reranker: FakeReranker, **knobs: object) -> MedRagAgent:
-    return MedRagAgent(hybrid=hybrid, reranker=reranker, **knobs)  # type: ignore[arg-type]
+    """Agent with the legacy v1 knobs unless a test overrides one.
+
+    Starting from v1 keeps each test about exactly one behaviour; the shipped
+    v2 defaults are covered by `test_default_agent_is_v2`.
+    """
+    merged = {**_LEGACY_V1, **knobs}
+    return MedRagAgent(hybrid=hybrid, reranker=reranker, **merged)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -353,6 +366,28 @@ def test_faithful_decomposition_uses_v2_prompt(scripted_llm, monkeypatch):
     seen.clear()
     _agent(hybrid, FakeReranker()).run("Q?")
     assert seen[0] == DECOMPOSE_SYSTEM
+
+
+def test_default_agent_is_v2(scripted_llm, monkeypatch):
+    """The no-argument agent (what the API and UI construct) must be the fixed loop."""
+    seen: list[str] = []
+    real = ScriptedLLM(decompose='[{"text": "tangent"}]')
+
+    def spy(system: str, user: str, **kw: object) -> LLMResponse:
+        seen.append(system)
+        return real(system, user, **kw)
+
+    monkeypatch.setattr(llm, "complete", spy)
+    hybrid = FakeHybrid({"Q?": [_rc("gold")], "tangent": [_rc("t1")]})
+    reranker = FakeReranker(base={"Q?": 0.5, "tangent": 0.9})
+
+    agent = MedRagAgent(hybrid=hybrid, reranker=reranker)  # type: ignore[arg-type]
+    _, answer = agent.run("Q?")
+
+    assert seen[0] == DECOMPOSE_SYSTEM_FAITHFUL  # v2 planner prompt
+    assert hybrid.calls[0] == "Q?"  # original question searched first
+    assert answer.sub_queries[0].text == "Q?"
+    assert reranker.calls[-1] == ("Q?", 2)  # merged pool re-scored against the question
 
 
 def test_generate_answer_slices_top_k(scripted_llm):

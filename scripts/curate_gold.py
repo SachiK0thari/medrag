@@ -1,9 +1,10 @@
 """LLM-assisted gold-PMID curation for the eval question set.
 
-For each EvalQuestion, pulls a BM25 candidate pool from the local corpus,
-sends the candidate titles + abstracts to the LLM, and asks it to pick the
-PMIDs that authoritatively answer the question. Writes the result to
-`src/medrag/eval/gold_pmids.py`.
+For each EvalQuestion, builds a candidate pool from the local corpus, sends
+the candidate titles + abstracts to the LLM, and asks it to pick the PMIDs
+that authoritatively answer the question. Writes the result to
+`src/medrag/eval/gold_pmids.py` and an audit trail (pool, per-retriever
+provenance, picks) to `data/gold_curation_audit.json`.
 
 This is WEAK SUPERVISION: the LLM has only the corpus abstracts to work
 with, and the corpus here is secondary GLP-1/CV literature (reviews,
@@ -17,20 +18,28 @@ Rationale for LLM curation over manual curation:
     - Transparent and re-runnable when the corpus is re-ingested.
     - The prompt is auditable (lives in this file).
 
-Rationale for BM25 candidate pool over hybrid:
-    - Pure-keyword recall breaks a circularity concern: if we used dense
-      retrieval to build the gold pool, the dense baseline would trivially
-      win the eval. BM25 also isn't the method we're most trying to showcase.
-    - 30 candidates gives plenty of headroom for the LLM to pick 2-5 gold.
+Rationale for a pooled BM25 + dense candidate set (TREC-style pooling):
+    - A paper can only become gold if it is in the candidate pool, so a pool
+      drawn from ONE retriever biases the benchmark toward that retriever.
+      The first version of this script pooled from BM25 only, and BM25-only
+      then posted the best recall of any config — the fingerprint of that
+      bias. Pooling the top-k of both first-stage retrievers removes it.
+    - The reranker and the agent are deliberately NOT pool sources: they are
+      the systems under test.
+    - The pool is shuffled with a per-question seed before the LLM sees it,
+      so list position carries no hint about which retriever ranked a paper
+      highly (LLM judges are position-biased).
 
 Usage:
-    python scripts/curate_gold.py
+    python scripts/curate_gold.py            # resume: only uncurated/failed questions
+    python scripts/curate_gold.py --force    # re-curate every question from scratch
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import textwrap
 import time
 
@@ -40,18 +49,21 @@ from medrag.agent import llm
 from medrag.agent.graph import _extract_json
 from medrag.config import PROJECT_ROOT, get_settings
 from medrag.eval.questions import QUESTIONS
+from medrag.models import Paper, RetrievedChunk
 from medrag.retrieval.bm25 import BM25Retriever
+from medrag.retrieval.dense import DenseRetriever
 from medrag.store import Store
 
 # Pacing: OpenRouter paid models are permissive, so the inter-request gap
-# is short; the 429 backoff stays as a safety net. Each request is ~2500 tokens (system + question + 15
-# abstracts @ 500 chars) + ~300 output.
-CANDIDATE_POOL_SIZE = 15
+# is short; the 429 backoff stays as a safety net. Each request is ~5000
+# tokens (system + question + up to 30 abstracts @ 500 chars) + ~300 output.
+PER_RETRIEVER_POOL_SIZE = 15  # unique papers taken from EACH of BM25 and dense
 ABSTRACT_MAX_CHARS = 500
 REQUEST_SLEEP_SEC = 2.0
 RATE_LIMIT_BACKOFF_SEC = 60.0
 
 OUTPUT_PATH = PROJECT_ROOT / "src" / "medrag" / "eval" / "gold_pmids.py"
+AUDIT_PATH = get_settings().data_dir / "gold_curation_audit.json"
 
 
 CURATION_SYSTEM = """You are a medical literature curator building a retrieval
@@ -80,22 +92,58 @@ Return ONLY a JSON object with this exact shape:
 No prose outside the JSON."""
 
 
-def _render_candidates(retrieved: list) -> tuple[str, set[str]]:  # type: ignore[type-arg]
-    """Render unique PMIDs + title + trimmed abstract for the LLM prompt."""
-    seen: dict[str, str] = {}
+def _top_unique_papers(retrieved: list[RetrievedChunk], limit: int) -> list[Paper]:
+    """First `limit` distinct papers in rank order (retrievers return chunks)."""
+    seen: dict[str, Paper] = {}
     for rc in retrieved:
-        pmid = rc.paper.pmid
-        if pmid in seen or len(seen) >= CANDIDATE_POOL_SIZE:
-            continue
-        abstract = (rc.paper.abstract or "").strip().replace("\n", " ")
+        if rc.paper.pmid not in seen:
+            seen[rc.paper.pmid] = rc.paper
+            if len(seen) >= limit:
+                break
+    return list(seen.values())
+
+
+def build_pool(
+    question: str,
+    bm25: BM25Retriever,
+    dense: DenseRetriever,
+    *,
+    seed: str,
+) -> tuple[list[Paper], dict[str, str]]:
+    """Union of each retriever's top papers, shuffled.
+
+    Returns the pooled papers and a provenance map pmid -> "bm25" | "dense" |
+    "both", kept for the audit file only (never shown to the LLM).
+    """
+    fetch = PER_RETRIEVER_POOL_SIZE * 3  # over-fetch chunks; several map to one paper
+    sparse = _top_unique_papers(bm25.search(question, fetch), PER_RETRIEVER_POOL_SIZE)
+    dense_papers = _top_unique_papers(dense.search(question, fetch), PER_RETRIEVER_POOL_SIZE)
+
+    provenance: dict[str, str] = {p.pmid: "bm25" for p in sparse}
+    pool: dict[str, Paper] = {p.pmid: p for p in sparse}
+    for p in dense_papers:
+        provenance[p.pmid] = "both" if p.pmid in provenance else "dense"
+        pool.setdefault(p.pmid, p)
+
+    papers = list(pool.values())
+    random.Random(seed).shuffle(papers)
+    return papers, provenance
+
+
+def _render_candidates(papers: list[Paper]) -> str:
+    """PMID + title + trimmed abstract for the LLM prompt."""
+    blocks: list[str] = []
+    for paper in papers:
+        abstract = (paper.abstract or "").strip().replace("\n", " ")
         if len(abstract) > ABSTRACT_MAX_CHARS:
             abstract = abstract[:ABSTRACT_MAX_CHARS] + "..."
-        title = rc.paper.title.strip()
-        seen[pmid] = (
-            f"PMID {pmid}: {title}\n    {abstract}" if abstract else f"PMID {pmid}: {title}"
+        title = paper.title.strip()
+        blocks.append(
+            f"PMID {paper.pmid}: {title}\n    {abstract}"
+            if abstract
+            else f"PMID {paper.pmid}: {title}"
         )
-    block = "\n\n".join(seen.values())
-    return block, set(seen.keys())
+    return "\n\n".join(blocks)
 
 
 def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> str:
@@ -118,33 +166,36 @@ def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> str:
 
 
 def curate_one(
+    qid: str,
     question: str,
     bm25: BM25Retriever,
-) -> tuple[list[str], str]:
-    retrieved = bm25.search(question, CANDIDATE_POOL_SIZE * 3)  # extra for dedup
-    candidates_block, valid_pmids = _render_candidates(retrieved)
-    if not valid_pmids:
-        return [], "no candidates from BM25"
+    dense: DenseRetriever,
+) -> tuple[list[str], str, dict[str, str]]:
+    """Returns (gold PMIDs, one-line reasoning, pool provenance)."""
+    papers, provenance = build_pool(question, bm25, dense, seed=qid)
+    if not papers:
+        return [], "no candidates from either retriever", provenance
+    valid_pmids = set(provenance)
 
-    user = f"QUESTION:\n{question}\n\nCANDIDATE POOL:\n{candidates_block}"
+    user = f"QUESTION:\n{question}\n\nCANDIDATE POOL:\n{_render_candidates(papers)}"
     text = _call_with_backoff(CURATION_SYSTEM, user)
 
     raw = _extract_json(text, "{", "}")
     if raw is None:
-        return [], f"unparseable LLM output: {text[:120]}"
+        return [], f"unparseable LLM output: {text[:120]}", provenance
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError as e:
-        return [], f"JSON decode error: {e}"
+        return [], f"JSON decode error: {e}", provenance
 
     picks = obj.get("gold_pmids", [])
     reasoning = str(obj.get("reasoning", "")).strip()
     if not isinstance(picks, list):
-        return [], "gold_pmids not a list"
+        return [], "gold_pmids not a list", provenance
 
     # Drop anything the LLM hallucinated outside the candidate pool.
     clean = [str(p) for p in picks if str(p) in valid_pmids]
-    return clean, reasoning
+    return clean, reasoning, provenance
 
 
 def _dq(s: str) -> str:
@@ -165,7 +216,8 @@ def write_gold_module(gold: dict[str, list[str]], reasoning: dict[str, str]) -> 
         "dict records the LLM's one-line justification per question and is kept",
         "for audit / review.",
         "",
-        "Curation method: BM25 top-15 candidates → LLM filter (``LLM_MODEL``). Weak",
+        "Curation method: pooled candidates (top-15 papers from BM25 plus top-15",
+        "from dense retrieval, shuffled) → LLM filter (``LLM_MODEL``). Weak",
         "supervision, not ground truth — spot-check before publication.",
         '"""',
         "",
@@ -205,6 +257,11 @@ def main() -> None:
         default=None,
         help="Override the OpenRouter model id (default: LLM_MODEL from .env)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-curate every question, ignoring gold already in gold_pmids.py",
+    )
     args = parser.parse_args()
 
     if args.model:
@@ -213,11 +270,17 @@ def main() -> None:
 
     store = Store()
     bm25 = BM25Retriever.from_store(store)
+    dense = DenseRetriever(store=store)
     print(f"BM25 corpus loaded: {len(bm25)} chunks")
 
-    gold, reasoning = _load_existing_gold()
-    if gold:
-        print(f"resuming: {sum(1 for v in gold.values() if v)} questions already curated")
+    if args.force:
+        gold, reasoning = {}, {}
+        print("--force: re-curating every question")
+    else:
+        gold, reasoning = _load_existing_gold()
+        if gold:
+            print(f"resuming: {sum(1 for v in gold.values() if v)} questions already curated")
+    audit: dict[str, dict[str, object]] = {}
 
     for q in QUESTIONS:
         prior_note = reasoning.get(q.qid, "")
@@ -227,7 +290,7 @@ def main() -> None:
             continue
         print(f"  {q.qid}: {q.question[:80]}")
         try:
-            picks, note = curate_one(q.question, bm25)
+            picks, note, provenance = curate_one(q.qid, q.question, bm25, dense)
         except Exception as e:  # checkpoint and continue on any failure
             print(f"    ERROR: {e}")
             gold[q.qid] = []
@@ -235,7 +298,16 @@ def main() -> None:
         else:
             gold[q.qid] = picks
             reasoning[q.qid] = note
-            print(f"    → {picks}  ({note[:80]})")
+            audit[q.qid] = {
+                "question": q.question,
+                "pool": provenance,
+                "gold": {p: provenance[p] for p in picks},
+                "reasoning": note,
+            }
+            AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            AUDIT_PATH.write_text(json.dumps(audit, indent=2))
+            sources = [provenance[p] for p in picks]
+            print(f"    → {picks}  from {sources}  ({note[:70]})")
 
         # Checkpoint after every question so a mid-run crash doesn't lose work.
         write_gold_module(gold, reasoning)

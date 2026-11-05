@@ -8,8 +8,10 @@ reflect node can append a follow-up sub-query and loop without re-running
 anything. Accumulated `RetrievedChunk`s are deduped by chunk_id and kept in
 rerank-score order so the answer node can slice the top-N directly.
 
-Ablation knobs (all default to the original v1 behaviour so the ``agentic``
-eval row stays a true baseline):
+Loop behaviour is controlled by four knobs. The defaults are the v2 loop
+that the API and UI ship; the ``agentic`` eval config passes the legacy v1
+values explicitly so the benchmark keeps a true "before" row. See
+``docs/eval_findings.md`` for the ablation that motivated each default.
 
 - ``keep_original_query``: always search the user's question verbatim as the
   first sub-query. v1 only searched the LLM's paraphrased sub-queries, which
@@ -265,10 +267,10 @@ class MedRagAgent:
         hybrid: HybridRetriever | None = None,
         reranker: Reranker | None = None,
         store: Store | None = None,
-        keep_original_query: bool = False,
-        rerank_against_original: bool = False,
+        keep_original_query: bool = True,
+        rerank_against_original: bool = True,
         max_reflection_loops: int | None = None,
-        faithful_decomposition: bool = False,
+        faithful_decomposition: bool = True,
     ) -> None:
         self._settings = get_settings()
         self._store = store

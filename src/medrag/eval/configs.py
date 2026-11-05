@@ -16,9 +16,11 @@ Components (store, BM25, dense, reranker, agent) are built lazily and
 shared across configs via `_SharedComponents` so a full eval run only
 loads the corpus and the cross-encoder once.
 
-Agentic ablations: `agentic` is the unmodified v1 loop. Each `agentic_*`
-variant flips exactly one `MedRagAgent` knob so the eval table isolates the
-effect of that change; `agentic_v2` is the combination that ships.
+Agentic ablations: `agentic` is the original v1 loop, reproduced by passing
+the legacy knob values explicitly (`MedRagAgent`'s own defaults are v2). Each
+`agentic_*` variant flips exactly one knob relative to v1 so the eval table
+isolates the effect of that change; `agentic_v2` is the combination that
+ships as the default in the API and UI.
 """
 
 from __future__ import annotations
