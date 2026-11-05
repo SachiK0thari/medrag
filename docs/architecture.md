@@ -76,8 +76,11 @@ spin-up matches a real production deployment.
 ## Benchmarks
 
 Per-config retrieval quality, faithfulness, cost and latency are in the
-Evaluation section of the README. Per-question rows are written to
-`data/eval_results.csv` by `make eval`.
+Evaluation section of the README, and the analysis of why the first agentic
+loop regressed is in [`eval_findings.md`](eval_findings.md). `make eval`
+writes per-question rows to `data/eval_results.csv` and per-step agent traces
+to `data/eval_traces.jsonl`; `python scripts/analyze_eval.py` turns those two
+files into every table quoted in the docs.
 
 ## Module map
 
