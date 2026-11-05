@@ -56,9 +56,9 @@
 **PubMed/PMC over Google Search.** Structured metadata, free, rate-limited but
 predictable, gives MeSH terms for free, and PMC OA gives clean full-text XML
 without PDF parsing pain. Aligns with how a real medical-affairs tool would be built.
-The committed corpus does not get that far: the ingestion run stored no PMC body
-text, so all 902 chunks come from abstracts (see "What I'd do differently" in the
-README).
+The committed corpus does not get that far: a parser bug, since fixed, made the
+ingestion run discard every PMC body, so all 902 indexed chunks come from
+abstracts (see "What I'd do differently" in the README).
 
 **bge-small-en-v1.5 embeddings.** 384-dim, runs on CPU, top of MTEB at its size
 class, no API cost. Keeps the per-query cost floor at the LLM calls alone.
@@ -105,7 +105,7 @@ fast; a managed store is the part that would not change at a larger scale.
 ## Benchmarks
 
 Per-config retrieval quality, faithfulness, cost and latency are in the
-Evaluation section of the README, and the analysis of why the first agentic
+"Key finding" section of the README, and the analysis of why the first agentic
 loop regressed is in [`eval_findings.md`](eval_findings.md). `make eval`
 writes per-question rows to `data/eval_results.csv` and per-step agent traces
 to `data/eval_traces.jsonl`; `python scripts/analyze_eval.py` turns those two
