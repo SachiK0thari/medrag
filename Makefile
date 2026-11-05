@@ -1,4 +1,4 @@
-.PHONY: install dev lint format type test ingest eval api ui clean
+.PHONY: install dev lint format type test ingest eval plot api ui clean
 
 install:
 	pip install -e .
@@ -29,6 +29,9 @@ ingest:
 
 eval:
 	python scripts/run_eval.py
+
+plot:
+	python scripts/plot_eval.py
 
 api:
 	uvicorn medrag.api.main:app --reload --port 8000

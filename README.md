@@ -14,8 +14,9 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 
 > Medical affairs teams at GLP-1 manufacturers field hundreds of literature
 > questions weekly from field medical liaisons. **MedRAG reduces a multi-hour
-> manual literature review to a cited answer in under 20 seconds** over 500
-> open-access papers on GLP-1 receptor agonists and cardiovascular outcomes.
+> manual literature review to a cited answer in about 17 seconds** (median over
+> the 33 evaluation questions) across the abstracts of 498 recent PubMed papers
+> on GLP-1 receptor agonists and cardiovascular outcomes.
 
 [![ci](https://github.com/SachiK0thari/medrag/actions/workflows/ci.yml/badge.svg)](https://github.com/SachiK0thari/medrag/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11-blue)](https://www.python.org)
@@ -23,6 +24,12 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 [![mypy](https://img.shields.io/badge/types-mypy%20strict-blue)](https://mypy-lang.org)
 
 **Live demo:** [huggingface.co/spaces/SachiK/medrag](https://huggingface.co/spaces/SachiK/medrag)
+
+![A question about the SELECT trial is typed into the MedRAG app. After a short wait the app shows a cited answer, the latency, and the list of source papers, and the first source is opened to show its PMID and the quoted passage.](docs/demo.gif)
+
+<sub>Recorded from the app running locally (`python scripts/record_demo.py`).
+The wait is shortened in the recording; the latency shown in the app is the
+real one for that query.</sub>
 
 ---
 
@@ -33,7 +40,7 @@ MedRAG:
 
 1. **Plans** the search with an LLM: atomic questions are searched as asked,
    and only genuinely multi-part questions are split into sub-queries.
-2. **Retrieves** relevant chunks from a 500-paper PubMed/PMC corpus using a
+2. **Retrieves** relevant chunks from a corpus of 498 PubMed abstracts using a
    hybrid BM25 + dense pipeline fused via Reciprocal Rank Fusion.
 3. **Reranks** the merged candidates against the original question with a
    cross-encoder (bge-reranker-v2-m3).
@@ -71,6 +78,18 @@ python scripts/analyze_eval.py
 | Hybrid + rerank | 0.652 | 0.750 | 0.658 | 0.906 | 6.6 s | $0.00026 |
 | Agentic v1 (original loop) | 0.449 | 0.611 | 0.439 | 0.897 | 26.1 s | $0.00074 |
 | **Agentic v2 (ships)** | **0.657** | **0.769** | **0.661** | 0.912 | 16.9 s | $0.00064 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/eval_cost_quality_dark.png">
+  <img src="docs/eval_cost_quality.png" alt="Scatter plots of Recall@10 against cost per query and against p50 latency for all ten configurations. Three agentic variants, including v2, sit level with the hybrid + rerank baseline but further right; agentic v1 sits far below it.">
+</picture>
+
+All ten configurations, including the four one-knob ablations the table leaves
+out (`python scripts/plot_eval.py`). The three agentic variants that carry a
+fix sit inside the baseline's noise band at 2.3 to 2.5 times its cost per
+query. The four single-shot configs make the same single LLM call on
+near-identical token counts, so the differences in their cost come from how
+OpenRouter billed each call, not from the retrieval method.
 
 ### Key finding: the first agent made retrieval worse, and the traces showed why
 
@@ -126,6 +145,13 @@ controls and the per-question evidence, is in
    independent parts, and this set has almost none.
 4. **Repeat the agentic runs** to shrink the noise floor before claiming any
    difference smaller than 0.05.
+5. **Index full text, and the landmark trials.** The corpus is 498 PubMed
+   records, nearly all from 2025 and 2026, indexed from their abstracts only
+   (902 chunks). 308 of them have a PMC ID, but the ingestion run stored no
+   body text, and the original trial reports (LEADER and SUSTAIN-6 are from
+   2016) predate the corpus. So the agent can say what a trial measured and
+   often cannot quote its hazard ratio; it says so instead of guessing. This,
+   not the retriever, is the ceiling on answer quality.
 
 ## Stack
 
@@ -165,11 +191,16 @@ make ingest        # ~10-15 min for 500 papers on a laptop
 # 4. Evaluate
 make eval                        # writes data/eval_results.csv + eval_traces.jsonl
 python scripts/analyze_eval.py   # tables, confidence intervals, agent attribution
+python scripts/plot_eval.py      # docs/eval_cost_quality.png (light + dark)
 
 # 5. Run
 make api           # FastAPI on http://localhost:8000
 make ui            # Streamlit on http://localhost:8501
 ```
+
+Steps 3 and 4 are optional if you only want the numbers: the eval results are
+committed, so `python scripts/analyze_eval.py` and `python scripts/plot_eval.py`
+work straight after `make dev`, with no API keys.
 
 ## Project layout
 
@@ -185,7 +216,7 @@ medrag/
 │   ├── api/                ← FastAPI service
 │   └── ui/                 ← Streamlit demo
 ├── tests/                  ← pytest, runs in CI
-├── scripts/                ← ingest, run_eval, analyze_eval, curate_gold, grade_gold
+├── scripts/                ← ingest, run_eval, analyze_eval, plot_eval, curate_gold, grade_gold, record_demo
 ├── data/eval_results.csv   ← Committed eval run (with eval_traces.jsonl)
 ├── docs/architecture.md    ← System diagram + design rationale
 ├── docs/eval_findings.md   ← Why the agent regressed and what fixed it
@@ -200,6 +231,9 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
+- **Tests** — 96 unit tests that run in about a second with no network and no
+  model downloads. Line coverage is 62% overall and 93% on the agent graph;
+  the uncovered code is the network-bound ingestion and retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
 - **Reproducible ingestion** — raw PubMed metadata persisted to SQLite so
   re-chunking and re-embedding don't require re-fetching.
