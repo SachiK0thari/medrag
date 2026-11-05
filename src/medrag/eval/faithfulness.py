@@ -10,6 +10,7 @@ transitive dependency.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 
 from langchain_openai import ChatOpenAI
@@ -19,6 +20,8 @@ from ragas.metrics import Faithfulness
 
 from medrag.config import get_settings
 from medrag.models import RetrievedChunk
+
+_log = logging.getLogger(__name__)
 
 _llm: LangchainLLMWrapper | None = None
 
@@ -48,8 +51,11 @@ def compute_faithfulness(
 
     Returns None (not 0.0) when contexts/answer are empty or scoring fails,
     so the harness can distinguish "0% supported" from "scorer failed" in the CSV.
+    Failures are logged at WARNING with the exception type so a blank column
+    in the CSV is never a mystery.
     """
     if not contexts or not answer_text.strip():
+        _log.warning("faithfulness skipped: empty contexts or answer")
         return None
 
     sample = SingleTurnSample(
@@ -63,10 +69,12 @@ def compute_faithfulness(
 
     try:
         score = asyncio.run(scorer.single_turn_ascore(sample))
-    except Exception:
+    except Exception as e:
+        _log.warning("faithfulness scorer failed: %s: %s", type(e).__name__, e)
         return None
 
     if score is None or not isinstance(score, int | float) or math.isnan(score):
+        _log.warning("faithfulness scorer returned non-numeric result: %r", score)
         return None
 
     return float(score)
