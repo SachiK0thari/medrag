@@ -7,11 +7,17 @@ columns we actually query on (pmid, chunk_id, section) are promoted.
 This is the system of record for BM25 and the hydration source for dense
 retrieval: Pinecone only stores vectors keyed by chunk_id, and we look up
 the Chunk + Paper here after a query.
+
+One `Store` is shared by every request the API and the UI serve, and both
+hand each request to a different thread. sqlite3 connections refuse that by
+default, so the connection is opened with `check_same_thread=False` and every
+statement runs under a lock.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -49,13 +55,15 @@ class Store:
         settings = get_settings()
         self._path = path or settings.sqlite_path
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._path)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> Store:
         return self
@@ -72,12 +80,13 @@ class Store:
 
     def save_papers(self, papers: Iterable[Paper]) -> int:
         rows = [(p.pmid, p.pmcid, p.title, p.year, p.model_dump_json()) for p in papers]
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO papers (pmid, pmcid, title, year, json) "
-            "VALUES (?, ?, ?, ?, ?)",
-            rows,
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO papers (pmid, pmcid, title, year, json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
         return len(rows)
 
     def save_chunks(self, chunks: Iterable[Chunk]) -> int:
@@ -92,47 +101,51 @@ class Store:
             )
             for c in chunks
         ]
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO chunks "
-            "(chunk_id, pmid, section, chunk_index, text, json) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO chunks "
+                "(chunk_id, pmid, section, chunk_index, text, json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
         return len(rows)
 
     # ---- reads ----------------------------------------------------------- #
 
+    def _fetch(self, sql: str, params: Sequence[str] = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
+
     def load_all_papers(self) -> list[Paper]:
-        cur = self._conn.execute("SELECT json FROM papers")
-        return [Paper.model_validate_json(row["json"]) for row in cur]
+        rows = self._fetch("SELECT json FROM papers")
+        return [Paper.model_validate_json(row["json"]) for row in rows]
 
     def load_all_chunks(self) -> list[Chunk]:
-        cur = self._conn.execute("SELECT json FROM chunks ORDER BY pmid, chunk_index")
-        return [Chunk.model_validate_json(row["json"]) for row in cur]
+        rows = self._fetch("SELECT json FROM chunks ORDER BY pmid, chunk_index")
+        return [Chunk.model_validate_json(row["json"]) for row in rows]
 
     def get_papers(self, pmids: Sequence[str]) -> dict[str, Paper]:
         if not pmids:
             return {}
         placeholders = ",".join("?" * len(pmids))
-        cur = self._conn.execute(
-            f"SELECT pmid, json FROM papers WHERE pmid IN ({placeholders})",
-            list(pmids),
+        rows = self._fetch(
+            f"SELECT pmid, json FROM papers WHERE pmid IN ({placeholders})", list(pmids)
         )
-        return {row["pmid"]: Paper.model_validate_json(row["json"]) for row in cur}
+        return {row["pmid"]: Paper.model_validate_json(row["json"]) for row in rows}
 
     def get_chunks(self, chunk_ids: Sequence[str]) -> dict[str, Chunk]:
         if not chunk_ids:
             return {}
         placeholders = ",".join("?" * len(chunk_ids))
-        cur = self._conn.execute(
+        rows = self._fetch(
             f"SELECT chunk_id, json FROM chunks WHERE chunk_id IN ({placeholders})",
             list(chunk_ids),
         )
-        return {row["chunk_id"]: Chunk.model_validate_json(row["json"]) for row in cur}
+        return {row["chunk_id"]: Chunk.model_validate_json(row["json"]) for row in rows}
 
     def count_papers(self) -> int:
-        return int(self._conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
+        return int(self._fetch("SELECT COUNT(*) FROM papers")[0][0])
 
     def count_chunks(self) -> int:
-        return int(self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+        return int(self._fetch("SELECT COUNT(*) FROM chunks")[0][0])
