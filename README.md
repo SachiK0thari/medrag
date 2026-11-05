@@ -33,6 +33,72 @@ real one for that query.</sub>
 
 ---
 
+## Key finding: the first agent made retrieval worse, and the traces showed why
+
+The evaluation compares two ways of answering a question. A **single-shot**
+pipeline retrieves once and answers; the strongest one (BM25 + dense search,
+fused, then reranked by a cross-encoder) is the baseline. The **agent** wraps
+that baseline in an LLM loop that plans sub-queries, retrieves for each, and
+checks whether the evidence is sufficient before answering.
+
+33 held-out GLP-1 / cardiovascular questions, ten configurations, one run each
+with `deepseek/deepseek-v4.1-flash`. The results and per-step traces are
+committed, so every evaluation number in this README regenerates offline in a
+second:
+
+```bash
+python scripts/analyze_eval.py
+```
+
+| Config | Recall@10 | Recall@10 (strict gold) | MRR | RAGAS faithfulness | p50 latency | $/query |
+|---|---|---|---|---|---|---|
+| BM25 only | 0.490 | 0.620 | 0.408 | 0.868 | 1.2 s | $0.00034 |
+| Dense only | 0.586 | 0.546 | 0.592 | 0.872 | 1.9 s | $0.00036 |
+| Hybrid (RRF) | 0.601 | 0.722 | 0.521 | 0.933 | 1.5 s | $0.00035 |
+| Hybrid + rerank | 0.652 | 0.750 | 0.658 | 0.906 | 6.6 s | $0.00026 |
+| Agentic v1 (original loop) | 0.449 | 0.611 | 0.439 | 0.897 | 26.1 s | $0.00074 |
+| **Agentic v2 (ships)** | **0.657** | **0.769** | **0.661** | 0.912 | 16.9 s | $0.00064 |
+
+The gold labels, the strict column and the noise floor are explained under
+[How far to trust the evaluation numbers](#how-far-to-trust-the-evaluation-numbers).
+
+The original agentic loop scored 0.20 recall **below** the hybrid + rerank
+pipeline it wraps (95% CI −0.33 to −0.08), at four times the latency. A
+one-knob-at-a-time ablation over the saved traces located the cause:
+
+| | Gold papers found by a sub-query | Gold papers in the final top 10 |
+|---|---|---|
+| Hybrid + rerank (no agent) | — | 57 / 90 |
+| Agentic v1 | 69 / 90 | 40 / 90 |
+| v1 + merged pool re-scored against the question | 75 / 90 | 59 / 90 |
+| v1 + planner told not to pad the query list | 64 / 90 | 58 / 90 |
+
+The agent's sub-queries *found* more gold papers than the baseline. It then
+discarded them: each sub-query's results were reranked against that sub-query
+and the lists were merged by score, but cross-encoder scores computed against
+different queries are not comparable. Either fix alone restores baseline
+recall. Reflection, the usual suspect, turned out not to matter.
+
+The fixed agent **matches** the single-shot pipeline and does not beat it. The
+planner judged 32 of the 33 questions atomic, so on this question set the loop
+costs 2.6× the latency for the same papers. The full analysis, including the
+controls and the per-question evidence, is in
+[`docs/eval_findings.md`](docs/eval_findings.md).
+
+### Cost against quality
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/eval_cost_quality_dark.png">
+  <img src="docs/eval_cost_quality.png" alt="Scatter plots of Recall@10 against cost per query and against p50 latency for all ten configurations. Three agentic variants, including v2, sit level with the hybrid + rerank baseline but further right; agentic v1 sits far below it.">
+</picture>
+
+All ten configurations, including the four one-knob ablations the first table
+leaves out (`python scripts/plot_eval.py`). The three agentic variants that
+carry a fix sit inside the baseline's noise band at 2.3 to 2.5 times its cost
+per query. The four single-shot configs make the same single LLM call on
+near-identical token counts, so the differences in their cost come from how
+OpenRouter billed each call, not from the retrieval method.
+
 ## What it does
 
 Given a clinical question (e.g. *"How did semaglutide affect MACE in SUSTAIN-6?"*),
@@ -60,71 +126,16 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
                             └── PubMed/PMC corpus          └── cited Pydantic Answer
 ```
 
-## Evaluation
-
-33 held-out GLP-1 / cardiovascular questions, ten configurations, one run each
-with `deepseek/deepseek-v4.1-flash`. The results and per-step traces are
-committed, so every number below regenerates offline in a second:
-
-```bash
-python scripts/analyze_eval.py
-```
-
-| Config | Recall@10 | Recall@10 (strict gold) | MRR | RAGAS faithfulness | p50 latency | $/query |
-|---|---|---|---|---|---|---|
-| BM25 only | 0.490 | 0.620 | 0.408 | 0.868 | 1.2 s | $0.00034 |
-| Dense only | 0.586 | 0.546 | 0.592 | 0.872 | 1.9 s | $0.00036 |
-| Hybrid (RRF) | 0.601 | 0.722 | 0.521 | 0.933 | 1.5 s | $0.00035 |
-| Hybrid + rerank | 0.652 | 0.750 | 0.658 | 0.906 | 6.6 s | $0.00026 |
-| Agentic v1 (original loop) | 0.449 | 0.611 | 0.439 | 0.897 | 26.1 s | $0.00074 |
-| **Agentic v2 (ships)** | **0.657** | **0.769** | **0.661** | 0.912 | 16.9 s | $0.00064 |
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/eval_cost_quality_dark.png">
-  <img src="docs/eval_cost_quality.png" alt="Scatter plots of Recall@10 against cost per query and against p50 latency for all ten configurations. Three agentic variants, including v2, sit level with the hybrid + rerank baseline but further right; agentic v1 sits far below it.">
-</picture>
-
-All ten configurations, including the four one-knob ablations the table leaves
-out (`python scripts/plot_eval.py`). The three agentic variants that carry a
-fix sit inside the baseline's noise band at 2.3 to 2.5 times its cost per
-query. The four single-shot configs make the same single LLM call on
-near-identical token counts, so the differences in their cost come from how
-OpenRouter billed each call, not from the retrieval method.
-
-### Key finding: the first agent made retrieval worse, and the traces showed why
-
-The original agentic loop scored 0.20 recall **below** the hybrid + rerank
-pipeline it wraps (95% CI −0.33 to −0.08), at four times the latency. A
-one-knob-at-a-time ablation over the saved traces located the cause:
-
-| | Gold papers found by a sub-query | Gold papers in the final top 10 |
-|---|---|---|
-| Hybrid + rerank (no agent) | — | 57 / 90 |
-| Agentic v1 | 69 / 90 | 40 / 90 |
-| v1 + merged pool re-scored against the question | 75 / 90 | 59 / 90 |
-| v1 + planner told not to pad the query list | 64 / 90 | 58 / 90 |
-
-The agent's sub-queries *found* more gold papers than the baseline. It then
-discarded them: each sub-query's results were reranked against that sub-query
-and the lists were merged by score, but cross-encoder scores computed against
-different queries are not comparable. Either fix alone restores baseline
-recall. Reflection, the usual suspect, turned out not to matter.
-
-The fixed agent **matches** the single-shot pipeline and does not beat it. The
-planner judged 32 of the 33 questions atomic, so on this question set the loop
-costs 2.6× the latency for the same papers. The full analysis, including the
-controls and the per-question evidence, is in
-[`docs/eval_findings.md`](docs/eval_findings.md).
-
-### How far to trust these numbers
+## How far to trust the evaluation numbers
 
 - **Gold labels are LLM-curated** from a pooled BM25 + dense candidate set
   (`scripts/curate_gold.py`). I hand-checked 28 of the 90 labels: none were
   irrelevant, 14 directly answer the question and 14 are only on topic.
-- **Hence the strict column.** A second judge graded every label against the
-  full abstract (`scripts/grade_gold.py`); it agreed with my 28 verdicts on 22
-  (Cohen's κ = 0.57) and was never more lenient than me. Strict gold keeps the
-  34 "directly answers" labels, which cover 18 questions.
+- **Hence the strict column in the results table.** A second judge graded
+  every label against the full abstract (`scripts/grade_gold.py`); it agreed
+  with my 28 verdicts on 22 (Cohen's κ = 0.57) and was never more lenient than
+  me. Strict gold keeps the 34 "directly answers" labels, which cover 18
+  questions.
 - **Differences under about 0.05 are noise.** Recall deltas carry paired
   bootstrap confidence intervals, and two configs that are identical up to the
   first merge differed by 0.045 from planner sampling alone.
@@ -132,26 +143,6 @@ controls and the per-question evidence, is in
   is in ordering (strict MRR 0.44 → 0.72), and agentic v1 is worse than the
   baseline. **What is not:** BM25 against dense, which flips between the two
   gold sets.
-
-### What I'd do differently
-
-1. **Route instead of always looping.** When the planner returns one query,
-   run the single-shot path and skip reflection: baseline quality at baseline
-   cost.
-2. **Make the critic emit a search query.** Today the follow-up search uses
-   the critic's complaint verbatim, and it changed recall on 2 of the 12
-   questions where it fired.
-3. **Add multi-hop questions.** Decomposition can only win on questions with
-   independent parts, and this set has almost none.
-4. **Repeat the agentic runs** to shrink the noise floor before claiming any
-   difference smaller than 0.05.
-5. **Index full text, and the landmark trials.** The corpus is 498 PubMed
-   records, nearly all from 2025 and 2026, indexed from their abstracts only
-   (902 chunks). 308 of them have a PMC ID, but the ingestion run stored no
-   body text, and the original trial reports (LEADER and SUSTAIN-6 are from
-   2016) predate the corpus. So the agent can say what a trial measured and
-   often cannot quote its hazard ratio; it says so instead of guessing. This,
-   not the retriever, is the ceiling on answer quality.
 
 ## Stack
 
@@ -225,15 +216,39 @@ medrag/
 └── pyproject.toml          ← Pinned deps, ruff/mypy/pytest config
 ```
 
+## What I'd do differently
+
+1. **Route instead of always looping.** When the planner returns one query,
+   run the single-shot path and skip reflection: baseline quality at baseline
+   cost.
+2. **Make the critic emit a search query.** Today the follow-up search uses
+   the critic's complaint verbatim, and it changed recall on 2 of the 12
+   questions where it fired.
+3. **Add multi-hop questions.** Decomposition can only win on questions with
+   independent parts, and this set has almost none.
+4. **Repeat the agentic runs** to shrink the noise floor before claiming any
+   difference smaller than 0.05.
+5. **Index full text, and the landmark trials.** The corpus is 498 PubMed
+   records, nearly all from 2025 and 2026, indexed from their abstracts only
+   (902 chunks). The ingestion run stored no body text: PMC had changed how it
+   tags an article's ID and the parser matched only the old tag, so every
+   fetched body was discarded. That is fixed and tested, and with the fix 253
+   of the 498 papers gain full text (about 6,900 chunks), but the index and
+   every number here predate it, and re-ingesting means re-running the eval.
+   The original trial reports (LEADER and SUSTAIN-6 are from 2016) also
+   predate the corpus. So the agent can say what a trial measured and often
+   cannot quote its hazard ratio; it says so instead of guessing. This, not
+   the retriever, is the ceiling on answer quality.
+
 ## Engineering practices
 
 - **Strict typing** — `mypy --strict` over the whole `src/` tree, Pydantic for
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 96 unit tests that run in about a second with no network and no
-  model downloads. Line coverage is 62% overall and 93% on the agent graph;
-  the uncovered code is the network-bound ingestion and retrieval clients.
+- **Tests** — 109 unit tests that run in under two seconds with no network and
+  no model downloads. Line coverage is 74% overall and 93% on the agent graph;
+  the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
 - **Reproducible ingestion** — raw PubMed metadata persisted to SQLite so
   re-chunking and re-embedding don't require re-fetching.
