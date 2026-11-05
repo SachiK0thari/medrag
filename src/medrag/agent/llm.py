@@ -7,6 +7,7 @@ codebase doesn't change.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion
 
 
+_log = logging.getLogger(__name__)
+
+
 @dataclass
 class LLMResponse:
     text: str
@@ -37,6 +41,15 @@ class LLMResponse:
     # provider did not return it, in which case the harness falls back to its
     # static pricing table.
     cost_usd: float | None = None
+    # "stop" on a normal completion; "length" when the output hit max_tokens.
+    finish_reason: str | None = None
+    # Hidden reasoning tokens billed as output. They count against max_tokens,
+    # so a reasoning model with a small cap can return empty visible text.
+    reasoning_tokens: int = 0
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
 
 
 _client: OpenAI | None = None
@@ -84,8 +97,13 @@ def complete(
     *,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    reasoning: bool | None = None,
 ) -> LLMResponse:
-    """Single chat completion with optional throttle + retry on rate limits."""
+    """Single chat completion with optional throttle + retry on rate limits.
+
+    `reasoning` overrides ``LLM_REASONING_ENABLED`` for this call (the gold
+    curation judge turns it on; the latency-sensitive agent leaves it off).
+    """
     from openai import APIConnectionError, APITimeoutError, RateLimitError
 
     settings = get_settings()
@@ -94,9 +112,18 @@ def complete(
     # OpenRouter-specific knobs go in extra_body (the OpenAI SDK passes them
     # through verbatim). ``usage.include`` makes the response carry the real
     # USD cost; ``reasoning`` toggles the model's thinking mode.
-    extra_body: dict[str, Any] = {"usage": {"include": True}}
-    if settings.llm_reasoning_enabled:
-        extra_body["reasoning"] = {"enabled": True}
+    #
+    # The reasoning flag is ALWAYS sent. Omitting it does not mean "off": it
+    # leaves the provider default, and DeepSeek V4.1 Flash reasons by default.
+    # Hidden reasoning tokens count against max_tokens, so with the flag
+    # omitted a tightly capped call could spend its whole budget thinking and
+    # return an empty string (this silently broke gold curation once).
+    use_reasoning = settings.llm_reasoning_enabled if reasoning is None else reasoning
+    effective_max_tokens = max_tokens or settings.llm_max_tokens
+    extra_body: dict[str, Any] = {
+        "usage": {"include": True},
+        "reasoning": {"enabled": use_reasoning},
+    }
 
     @retry(
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APITimeoutError)),
@@ -125,21 +152,33 @@ def complete(
                 {"role": "user", "content": user},
             ],
             temperature=temperature if temperature is not None else settings.llm_temperature,
-            max_tokens=max_tokens or settings.llm_max_tokens,
+            max_tokens=effective_max_tokens,
             extra_body=extra_body,
         )
 
     resp = _call()
     usage = resp.usage
+    choice = resp.choices[0]
     # OpenRouter adds a non-standard ``cost`` field when usage accounting is on.
     raw_cost = getattr(usage, "cost", None) if usage else None
+    details = getattr(usage, "completion_tokens_details", None) if usage else None
+    raw_reasoning = getattr(details, "reasoning_tokens", None) if details else None
     response = LLMResponse(
-        text=resp.choices[0].message.content or "",
+        text=choice.message.content or "",
         input_tokens=usage.prompt_tokens if usage else 0,
         output_tokens=usage.completion_tokens if usage else 0,
         model=resp.model or settings.llm_model,
         cost_usd=float(raw_cost) if isinstance(raw_cost, int | float) else None,
+        finish_reason=choice.finish_reason,
+        reasoning_tokens=raw_reasoning if isinstance(raw_reasoning, int) else 0,
     )
+    if response.truncated:
+        _log.warning(
+            "LLM output truncated at max_tokens=%d (reasoning_tokens=%d, visible_chars=%d)",
+            effective_max_tokens,
+            response.reasoning_tokens,
+            len(response.text),
+        )
     for bucket in _usage_stack:
         bucket.append(response)
     return response

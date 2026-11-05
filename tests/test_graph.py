@@ -274,7 +274,19 @@ def test_reflection_loop_runs_followup_only_for_pending_subqueries(scripted_llm)
     assert answer.n_retrieval_calls == 2
     assert {rc.paper.pmid for rc in retrieved} == {"1", "2"}
     assert [sq.text for sq in answer.sub_queries] == ["sq1", "follow-up query"]
-    assert sum(1 for e in trace if e["step"] == "reflect") == 2
+    reflects = [e for e in trace if e["step"] == "reflect"]
+    assert len(reflects) == 2
+    assert all(e["empty_reply"] is False and e["truncated"] is False for e in reflects)
+
+
+def test_empty_reflect_reply_is_flagged_in_trace(scripted_llm):
+    """An empty reply parses as 'sufficient'; the trace must not hide that."""
+    scripted_llm(reflect="")
+    hybrid = FakeHybrid({"sq1": [_rc("1")]})
+    _, _, trace = _agent(hybrid, FakeReranker()).run_with_trace("Q?")
+    reflect = next(e for e in trace if e["step"] == "reflect")
+    assert reflect["sufficient"] is True
+    assert reflect["empty_reply"] is True
 
 
 def test_reflection_loop_terminates_at_max_loops(scripted_llm):

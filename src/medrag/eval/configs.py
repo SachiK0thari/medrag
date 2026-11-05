@@ -25,10 +25,10 @@ ships as the default in the API and UI.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from medrag.agent.graph import MedRagAgent, generate_answer
+from medrag.agent.graph import MedRagAgent, TraceEntry, generate_answer
 from medrag.config import get_settings
 from medrag.models import Answer, RetrievedChunk
 from medrag.retrieval.bm25 import BM25Retriever
@@ -44,6 +44,8 @@ class EvalResult:
 
     retrieved: list[RetrievedChunk]
     answer: Answer
+    # Per-step agent trace (empty for the non-agentic configs).
+    trace: list[TraceEntry] = field(default_factory=list)
 
 
 class EvalConfig(Protocol):
@@ -205,8 +207,8 @@ class AgenticConfig:
         )
 
     def run(self, question: str) -> EvalResult:
-        retrieved, answer = self.agent().run(question)
-        return EvalResult(retrieved=retrieved, answer=answer)
+        retrieved, answer, trace = self.agent().run_with_trace(question)
+        return EvalResult(retrieved=retrieved, answer=answer, trace=trace)
 
 
 def build_all_configs() -> list[EvalConfig]:

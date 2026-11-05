@@ -81,6 +81,15 @@ def test_write_results_blank_for_missing_faithfulness(tmp_path: Path):
     assert rows[0]["config"] == "a"
 
 
+def test_write_results_includes_llm_call_diagnostics(tmp_path: Path):
+    out = tmp_path / "r.csv"
+    write_results([_row("a", "q1", llm_calls=3, truncated_calls=1)], out)
+    with out.open() as f:
+        row = next(csv.DictReader(f))
+    assert row["llm_calls"] == "3"
+    assert row["truncated_calls"] == "1"
+
+
 def test_config_names_are_unique_and_include_ablations():
     names = cfg_mod.config_names()
     assert len(names) == len(set(names))

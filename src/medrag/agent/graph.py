@@ -389,7 +389,15 @@ class MedRagAgent:
         sufficient, missing = _parse_reflection(resp.text)
         trace = [
             *state.get("trace", []),
-            {"step": "reflect", "sufficient": sufficient, "missing": missing},
+            {
+                "step": "reflect",
+                "sufficient": sufficient,
+                "missing": missing,
+                # An empty or truncated reply parses as "sufficient"; flag it so
+                # a silent no-op is distinguishable from a real judgement.
+                "empty_reply": not resp.text.strip(),
+                "truncated": resp.truncated,
+            },
         ]
         return {
             "needs_more": (not sufficient) and bool(missing),

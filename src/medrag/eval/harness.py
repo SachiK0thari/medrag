@@ -18,12 +18,19 @@ Per question and per config we record:
 
 Output:
     - data/eval_results.csv with one row per (config, question)
+    - data/eval_traces.jsonl with, per (config, question), the ranked PMIDs,
+      the agent's sub-queries and per-step trace, and the answer text — the
+      raw material for `scripts/analyze_eval.py`
     - printed summary table aggregated by config (means + p50 latency)
+
+Both files are checkpointed after every config, so a crash late in a long
+run keeps everything finished so far.
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -79,6 +86,10 @@ class EvalRow:
     output_tokens: int
     cost_usd: float
     latency_ms: float
+    llm_calls: int = 0
+    # Calls whose output hit max_tokens. Should be 0; anything else means an
+    # answer or a planner reply was cut off and the row is suspect.
+    truncated_calls: int = 0
 
 
 def _unique_preserving_order(pmids: list[str]) -> list[str]:
@@ -103,6 +114,8 @@ _CSV_FIELDS: list[str] = [
     "output_tokens",
     "cost_usd",
     "latency_ms",
+    "llm_calls",
+    "truncated_calls",
 ]
 
 
@@ -114,6 +127,7 @@ _CSV_FIELDS: list[str] = [
 def evaluate_config(
     config: EvalConfig,
     questions: list[EvalQuestion],
+    trace_path: Path | None = None,
 ) -> list[EvalRow]:
     # Imported here so the harness (and its unit tests) load without the
     # optional `eval` extra; ragas is only needed when a question is scored.
@@ -170,8 +184,24 @@ def evaluate_config(
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
+                llm_calls=len(usage),
+                truncated_calls=sum(1 for u in usage if u.truncated),
             )
         )
+        if trace_path is not None:
+            record = {
+                "config": config.name,
+                "qid": q.qid,
+                "question": q.question,
+                "gold": sorted(gold),
+                "ranked_pmids": retrieved_pmids,
+                "trace": result.trace,
+                "answer": result.answer.text,
+                "n_citations": len(result.answer.citations),
+                "faithfulness": faithfulness,
+            }
+            with trace_path.open("a") as f:
+                f.write(json.dumps(record) + "\n")
 
     if skipped:
         print(
@@ -232,14 +262,23 @@ def summarize(rows: list[EvalRow]) -> dict[str, dict[str, float]]:
 
 def run_all(configs: list[EvalConfig], out_path: Path | None = None) -> None:
     settings = get_settings()
+    out_path = out_path or settings.data_dir / "eval_results.csv"
+    trace_path = out_path.with_name(out_path.stem.replace("results", "traces") + ".jsonl")
+    if trace_path == out_path:  # --out without "results" in the name
+        trace_path = out_path.with_suffix(".traces.jsonl")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_path.write_text("")  # start fresh; evaluate_config appends
+
     all_rows: list[EvalRow] = []
     for cfg in configs:
-        print(f"Evaluating {cfg.name}...")
-        all_rows.extend(evaluate_config(cfg, QUESTIONS))
+        print(f"Evaluating {cfg.name}...", flush=True)
+        t0 = time.perf_counter()
+        all_rows.extend(evaluate_config(cfg, QUESTIONS, trace_path=trace_path))
+        write_results(all_rows, out_path)  # checkpoint after every config
+        print(f"  done in {time.perf_counter() - t0:.0f}s; checkpointed", flush=True)
 
-    out_path = out_path or settings.data_dir / "eval_results.csv"
-    write_results(all_rows, out_path)
     print(f"\nWrote {len(all_rows)} rows to {out_path}")
+    print(f"Wrote traces to {trace_path}")
 
     summary = summarize(all_rows)
     print("\nSummary (means unless noted):")

@@ -36,7 +36,11 @@ def _get_llm() -> LangchainLLMWrapper:
             api_key=settings.openrouter_api_key.get_secret_value(),
             model=settings.llm_model,
             temperature=0.0,
-            max_tokens=1024,
+            # RAGAS asks for a JSON list of every claim in the answer; leave
+            # room for it, and keep hidden reasoning from eating the budget
+            # (see the note in medrag.agent.llm.complete).
+            max_tokens=4096,
+            extra_body={"reasoning": {"enabled": False}},
         )
         _llm = LangchainLLMWrapper(chat)
     return _llm

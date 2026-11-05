@@ -56,7 +56,12 @@ from medrag.store import Store
 
 # Pacing: OpenRouter paid models are permissive, so the inter-request gap
 # is short; the 429 backoff stays as a safety net. Each request is ~5000
-# tokens (system + question + up to 30 abstracts @ 500 chars) + ~300 output.
+# tokens (system + question + up to 30 abstracts @ 500 chars).
+#
+# The judge runs with reasoning ON: curation quality matters and latency does
+# not. Reasoning tokens count against max_tokens, so the cap is generous; a
+# 384-token cap once truncated every reply to an empty string.
+JUDGE_MAX_TOKENS = 4000
 PER_RETRIEVER_POOL_SIZE = 15  # unique papers taken from EACH of BM25 and dense
 ABSTRACT_MAX_CHARS = 500
 REQUEST_SLEEP_SEC = 2.0
@@ -150,7 +155,14 @@ def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> str:
     """Retry on 429/413 rate-limit errors, honouring the retry-after header."""
     for attempt in range(1, max_retries + 1):
         try:
-            resp = llm.complete(system, user, max_tokens=384, temperature=0.0)
+            resp = llm.complete(
+                system, user, max_tokens=JUDGE_MAX_TOKENS, temperature=0.0, reasoning=True
+            )
+            if resp.truncated or not resp.text.strip():
+                raise RuntimeError(
+                    f"empty/truncated judge reply (finish={resp.finish_reason}, "
+                    f"reasoning_tokens={resp.reasoning_tokens})"
+                )
             return resp.text
         except APIStatusError as e:
             if attempt == max_retries or e.status_code not in (413, 429):
