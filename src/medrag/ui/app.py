@@ -28,7 +28,7 @@ with st.sidebar:
     st.markdown(
         "**Stack:** PubMed/PMC · bge embeddings · Pinecone · BM25 + RRF · "
         "bge-reranker · LangGraph · DeepSeek V4.1 Flash (OpenRouter)\n\n"
-        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 30 held-out questions.\n\n"
+        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 33 held-out questions.\n\n"
         "[Source on GitHub](https://github.com/SachiK0thari/medrag)"
     )
     st.divider()
