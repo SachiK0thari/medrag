@@ -7,6 +7,9 @@ gold-standard relevant PMIDs, and return a scalar in [0, 1].
 from __future__ import annotations
 
 import math
+import random
+from collections import Counter
+from collections.abc import Hashable, Sequence
 
 
 def recall_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
@@ -44,3 +47,37 @@ def ndcg_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
 
 def aggregate(metric_values: list[float]) -> float:
     return sum(metric_values) / len(metric_values) if metric_values else 0.0
+
+
+def paired_bootstrap_ci(
+    deltas: Sequence[float], *, samples: int = 10_000, seed: int = 0
+) -> tuple[float, float]:
+    """95% confidence interval for the mean of per-question differences.
+
+    `deltas` holds one value per question (metric under config A minus the
+    same metric under config B). Questions are resampled with replacement, so
+    the interval reflects how much the mean would move with a different draw
+    of questions; an interval that spans 0 means the configs are not
+    distinguishable on this question set.
+    """
+    n = len(deltas)
+    if n == 0:
+        return 0.0, 0.0
+    rng = random.Random(seed)
+    means = sorted(sum(deltas[rng.randrange(n)] for _ in range(n)) / n for _ in range(samples))
+    return means[int(0.025 * samples)], means[int(0.975 * samples) - 1]
+
+
+def cohen_kappa(a: Sequence[Hashable], b: Sequence[Hashable]) -> float:
+    """Chance-corrected agreement between two raters over the same items."""
+    if len(a) != len(b):
+        raise ValueError("raters must label the same items")
+    n = len(a)
+    if n == 0:
+        return 0.0
+    observed = sum(x == y for x, y in zip(a, b, strict=True)) / n
+    a_counts, b_counts = Counter(a), Counter(b)
+    expected = sum(a_counts[label] * b_counts[label] for label in a_counts) / (n * n)
+    if expected >= 1.0:
+        return 1.0
+    return (observed - expected) / (1 - expected)

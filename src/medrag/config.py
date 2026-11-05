@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     llm_throttle_s: float = 0.0  # min seconds between LLM calls (0 = off)
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
+    llm_timeout_s: float = 120.0  # per-request cap; the SDK default is 10 minutes
 
     # ---- Embeddings ------------------------------------------------------- #
     embedding_model: str = "BAAI/bge-small-en-v1.5"
