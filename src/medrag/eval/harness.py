@@ -24,7 +24,8 @@ Output:
     - printed summary table aggregated by config (means + p50 latency)
 
 Both files are checkpointed after every config, so a crash late in a long
-run keeps everything finished so far.
+run keeps everything finished so far. `run_all(..., keep_existing=True)` then
+re-runs only the named configs and keeps the other configs' rows and traces.
 """
 
 from __future__ import annotations
@@ -229,6 +230,39 @@ def write_results(rows: list[EvalRow], out_path: Path) -> None:
             writer.writerow(row_dict)
 
 
+def read_results(path: Path) -> list[EvalRow]:
+    """Load rows written by `write_results` (blank faithfulness -> None)."""
+    with path.open(newline="") as f:
+        return [
+            EvalRow(
+                config=r["config"],
+                qid=r["qid"],
+                recall_at_10=float(r["recall_at_10"]),
+                mrr=float(r["mrr"]),
+                ndcg_at_10=float(r["ndcg_at_10"]),
+                faithfulness=float(r["faithfulness"]) if r.get("faithfulness") else None,
+                input_tokens=int(r["input_tokens"]),
+                output_tokens=int(r["output_tokens"]),
+                cost_usd=float(r["cost_usd"]),
+                latency_ms=float(r["latency_ms"]),
+                llm_calls=int(r.get("llm_calls") or 0),
+                truncated_calls=int(r.get("truncated_calls") or 0),
+            )
+            for r in csv.DictReader(f)
+        ]
+
+
+def _load_kept(out_path: Path, trace_path: Path, rerun: set[str]) -> tuple[list[EvalRow], str]:
+    """Rows and trace lines from a previous run for configs NOT being re-run."""
+    rows = [r for r in read_results(out_path) if r.config not in rerun] if out_path.exists() else []
+    kept_lines: list[str] = []
+    if trace_path.exists():
+        for line in trace_path.read_text().splitlines():
+            if line.strip() and json.loads(line)["config"] not in rerun:
+                kept_lines.append(line)
+    return rows, "".join(line + "\n" for line in kept_lines)
+
+
 def _percentile(values: list[float], p: int) -> float:
     if not values:
         return 0.0
@@ -260,16 +294,33 @@ def summarize(rows: list[EvalRow]) -> dict[str, dict[str, float]]:
     return summary
 
 
-def run_all(configs: list[EvalConfig], out_path: Path | None = None) -> None:
+def run_all(
+    configs: list[EvalConfig],
+    out_path: Path | None = None,
+    *,
+    keep_existing: bool = False,
+) -> None:
+    """Evaluate `configs` and write the CSV + traces.
+
+    With `keep_existing`, rows and traces already on disk for configs that are
+    not in `configs` are preserved, so a subset can be re-run (after a crash or
+    a fix) without repeating the whole benchmark.
+    """
     settings = get_settings()
     out_path = out_path or settings.data_dir / "eval_results.csv"
     trace_path = out_path.with_name(out_path.stem.replace("results", "traces") + ".jsonl")
     if trace_path == out_path:  # --out without "results" in the name
         trace_path = out_path.with_suffix(".traces.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    trace_path.write_text("")  # start fresh; evaluate_config appends
 
     all_rows: list[EvalRow] = []
+    kept_traces = ""
+    if keep_existing:
+        all_rows, kept_traces = _load_kept(out_path, trace_path, {c.name for c in configs})
+        kept = sorted({r.config for r in all_rows})
+        print(f"Keeping {len(all_rows)} existing rows for: {', '.join(kept) or 'none'}", flush=True)
+    trace_path.write_text(kept_traces)  # evaluate_config appends
+
     for cfg in configs:
         print(f"Evaluating {cfg.name}...", flush=True)
         t0 = time.perf_counter()

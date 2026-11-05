@@ -3,6 +3,7 @@
 Usage:
     python scripts/run_eval.py                       # all configs -> data/eval_results.csv
     python scripts/run_eval.py --configs agentic,agentic_v2 --out data/eval_agentic.csv
+    python scripts/run_eval.py --configs agentic_v2 --keep-existing   # re-run one config in place
     python scripts/run_eval.py --list
 """
 
@@ -26,6 +27,11 @@ def main() -> None:
         type=Path,
         help="CSV path (default: data/eval_results.csv).",
     )
+    parser.add_argument(
+        "--keep-existing",
+        action="store_true",
+        help="Keep rows/traces already in --out for configs that are not being re-run.",
+    )
     parser.add_argument("--list", action="store_true", help="Print config names and exit.")
     args = parser.parse_args()
 
@@ -34,7 +40,7 @@ def main() -> None:
         return
 
     names = [n.strip() for n in args.configs.split(",")] if args.configs else None
-    run_all(build_configs(names), out_path=args.out)
+    run_all(build_configs(names), out_path=args.out, keep_existing=args.keep_existing)
 
 
 if __name__ == "__main__":

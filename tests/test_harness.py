@@ -10,9 +10,11 @@ import pytest
 from medrag.eval import configs as cfg_mod
 from medrag.eval.harness import (
     EvalRow,
+    _load_kept,
     _percentile,
     _unique_preserving_order,
     estimate_cost_usd,
+    read_results,
     summarize,
     write_results,
 )
@@ -129,3 +131,29 @@ def test_shared_components_cache_one_agent_per_knob_set(monkeypatch: pytest.Monk
     assert a1._keep_original_query is True
     assert b._rerank_against_original is True
     assert b._keep_original_query is False
+
+
+def test_read_results_round_trips_rows(tmp_path: Path):
+    out = tmp_path / "eval_results.csv"
+    rows = [_row("a", "q1", faithfulness=None), _row("b", "q2", llm_calls=4, truncated_calls=1)]
+    write_results(rows, out)
+    assert read_results(out) == rows
+
+
+def test_load_kept_drops_only_the_configs_being_rerun(tmp_path: Path):
+    out = tmp_path / "eval_results.csv"
+    traces = tmp_path / "eval_traces.jsonl"
+    write_results([_row("keep", "q1"), _row("rerun", "q1"), _row("keep", "q2")], out)
+    traces.write_text(
+        '{"config": "keep", "qid": "q1"}\n{"config": "rerun", "qid": "q1"}\n\n'
+        '{"config": "keep", "qid": "q2"}\n'
+    )
+
+    rows, kept_traces = _load_kept(out, traces, {"rerun"})
+
+    assert [(r.config, r.qid) for r in rows] == [("keep", "q1"), ("keep", "q2")]
+    assert kept_traces == '{"config": "keep", "qid": "q1"}\n{"config": "keep", "qid": "q2"}\n'
+
+
+def test_load_kept_with_no_previous_run_is_empty(tmp_path: Path):
+    assert _load_kept(tmp_path / "none.csv", tmp_path / "none.jsonl", {"x"}) == ([], "")
