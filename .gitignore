@@ -37,6 +37,10 @@ htmlcov/
 # Data (do not commit corpora or DBs)
 data/*
 !data/.gitkeep
+# Eval outputs are committed so every number in the docs can be regenerated
+# offline with `python scripts/analyze_eval.py`.
+!data/eval_results.csv
+!data/eval_traces.jsonl
 
 # Streamlit
 .streamlit/secrets.toml
