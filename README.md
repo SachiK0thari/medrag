@@ -53,9 +53,11 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
 
 ## Evaluation
 
-Held-out set of 30 GLP-1 / cardiovascular questions (33 authored, 3 dropped
-for lack of an in-corpus answer). Gold PMIDs were LLM-curated from a BM25
-candidate pool and manually spot-checked (see `scripts/curate_gold.py`).
+Held-out set of 33 GLP-1 / cardiovascular questions. Gold PMIDs were LLM-curated
+from a pooled BM25 + dense candidate set (see `scripts/curate_gold.py`). A manual
+spot-check of 28 labels across 10 questions found none irrelevant: 14 directly
+answer the question and 14 are on-topic but only partly answer it, so absolute
+recall is measured against a lenient gold set.
 Five configurations benchmarked:
 
 | Config | Recall@10 | nDCG@10 | RAGAS faithfulness | $/query |
