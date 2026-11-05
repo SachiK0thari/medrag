@@ -116,17 +116,16 @@ def _paper_from_article(art: etree._Element) -> Paper:
     year_text = art.findtext(".//JournalIssue/PubDate/Year")
     year = int(year_text) if year_text and year_text.isdigit() else None
 
-    doi = None
-    for aid in art.findall(".//ArticleId"):
-        if aid.get("IdType") == "doi":
-            doi = aid.text
-            break
-
-    pmcid = None
-    for aid in art.findall(".//ArticleId"):
-        if aid.get("IdType") == "pmc":
-            pmcid = aid.text
-            break
+    # Only the article's own ID list. A bare ".//ArticleId" also walks the
+    # reference list, so a paper with no PMC ID of its own was given the PMC ID
+    # of the first paper it cites that has one.
+    own_ids = {
+        aid.get("IdType"): aid.text
+        for aid in reversed(art.findall("./PubmedData/ArticleIdList/ArticleId"))
+        if aid.text
+    }
+    doi = own_ids.get("doi")
+    pmcid = own_ids.get("pmc")
 
     mesh_terms = [el.text or "" for el in art.findall(".//MeshHeading/DescriptorName") if el.text]
 
