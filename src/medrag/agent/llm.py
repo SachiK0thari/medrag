@@ -98,11 +98,15 @@ def complete(
     temperature: float | None = None,
     max_tokens: int | None = None,
     reasoning: bool | None = None,
+    timeout_s: float | None = None,
 ) -> LLMResponse:
     """Single chat completion with optional throttle + retry on rate limits.
 
     `reasoning` overrides ``LLM_REASONING_ENABLED`` for this call (the gold
     curation judge turns it on; the latency-sensitive agent leaves it off).
+    `timeout_s` overrides ``LLM_TIMEOUT_S``; a timed-out request is retried.
+    Without an explicit cap a stalled connection waits out the SDK's
+    10-minute default, which once froze a batch job on a single request.
     """
     from openai import APIConnectionError, APITimeoutError, RateLimitError
 
@@ -154,6 +158,7 @@ def complete(
             temperature=temperature if temperature is not None else settings.llm_temperature,
             max_tokens=effective_max_tokens,
             extra_body=extra_body,
+            timeout=timeout_s if timeout_s is not None else settings.llm_timeout_s,
         )
 
     resp = _call()

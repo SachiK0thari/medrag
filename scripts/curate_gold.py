@@ -67,6 +67,7 @@ from medrag.store import Store
 # produced each label.
 JUDGE_MAX_TOKENS = 16000
 JUDGE_FALLBACK_MAX_TOKENS = 1000
+JUDGE_TIMEOUT_SEC = 300.0  # a reasoning reply can legitimately take minutes
 PER_RETRIEVER_POOL_SIZE = 15  # unique papers taken from EACH of BM25 and dense
 ABSTRACT_MAX_CHARS = 500
 REQUEST_SLEEP_SEC = 2.0
@@ -164,7 +165,12 @@ def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> tuple[st
     for attempt in range(1, max_retries + 1):
         try:
             resp = llm.complete(
-                system, user, max_tokens=JUDGE_MAX_TOKENS, temperature=0.0, reasoning=True
+                system,
+                user,
+                max_tokens=JUDGE_MAX_TOKENS,
+                temperature=0.0,
+                reasoning=True,
+                timeout_s=JUDGE_TIMEOUT_SEC,
             )
             if not resp.truncated and resp.text.strip():
                 return resp.text, "reasoning"

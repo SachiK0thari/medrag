@@ -8,7 +8,12 @@ Reads the two files `scripts/run_eval.py` writes:
 and prints, as GitHub-flavoured markdown:
 
     1. The per-config summary table (recall, nDCG, faithfulness, cost, latency).
-    2. For each agentic config, how it differs from the hybrid_reranked
+    2. The same retrieval metrics against a STRICT gold set (papers graded
+       "directly answers" by `scripts/grade_gold.py`), with a paired bootstrap
+       confidence interval on each config's recall difference from the
+       baseline. With ~30 questions most differences are inside the noise;
+       the interval says which ones are not.
+    3. For each agentic config, how it differs from the hybrid_reranked
        baseline question by question, and WHERE gold papers were lost:
          - never surfaced: no sub-query returned the paper at all
            (the planner asked the wrong questions)
@@ -33,6 +38,12 @@ from collections import defaultdict
 from pathlib import Path
 
 from medrag.config import get_settings
+from medrag.eval.metrics import (
+    mean_reciprocal_rank,
+    ndcg_at_k,
+    paired_bootstrap_ci,
+    recall_at_k,
+)
 
 K = 10
 
@@ -110,6 +121,57 @@ def health_checks(by_config: dict[str, list[dict[str, str]]]) -> list[str]:
         if blank:
             problems.append(f"{cfg}: faithfulness missing on {blank}/{len(rows)} questions")
     return problems
+
+
+def load_grades() -> dict[str, dict[str, int]]:
+    """qid -> pmid -> grade (2 direct, 1 related, 0 irrelevant); {} if not graded yet."""
+    try:
+        from medrag.eval.gold_grades import GOLD_GRADES
+    except ImportError:
+        return {}
+    return GOLD_GRADES
+
+
+def gold_sets(
+    traces: dict[str, dict[str, dict]], grades: dict[str, dict[str, int]], min_grade: int
+) -> dict[str, set[str]]:
+    """qid -> gold PMIDs with grade >= min_grade; questions left with none are dropped."""
+    any_config = next(iter(traces.values()))
+    out: dict[str, set[str]] = {}
+    for qid, rec in any_config.items():
+        gold = {p for p in rec["gold"] if grades.get(qid, {}).get(p, 1) >= min_grade}
+        if gold:
+            out[qid] = gold
+    return out
+
+
+def retrieval_table(
+    traces: dict[str, dict[str, dict]], gold: dict[str, set[str]], baseline: str
+) -> str:
+    """Recall / MRR / nDCG recomputed from saved rankings against `gold`."""
+    qids = sorted(gold)
+
+    def recalls(cfg: str) -> list[float]:
+        return [recall_at_k(traces[cfg][q]["ranked_pmids"], gold[q], K) for q in qids]
+
+    base = recalls(baseline) if baseline in traces else None
+    lines = [
+        f"| Config | Recall@10 | MRR | nDCG@10 | Recall vs {baseline} (95% CI) |",
+        "|---|---|---|---|---|",
+    ]
+    for cfg, recs in traces.items():
+        rec = recalls(cfg)
+        mrr = _mean([mean_reciprocal_rank(recs[q]["ranked_pmids"], gold[q]) for q in qids])
+        ndcg = _mean([ndcg_at_k(recs[q]["ranked_pmids"], gold[q], K) for q in qids])
+        if base is None or cfg == baseline:
+            delta_cell = "—"
+        else:
+            deltas = [a - b for a, b in zip(rec, base, strict=True)]
+            lo, hi = paired_bootstrap_ci(deltas)
+            verdict = "" if lo <= 0.0 <= hi else " **significant**"
+            delta_cell = f"{_mean(deltas):+.3f} ({lo:+.3f} to {hi:+.3f}){verdict}"
+        lines.append(f"| {cfg} | {_mean(rec):.3f} | {mrr:.3f} | {ndcg:.3f} | {delta_cell} |")
+    return "\n".join(lines)
 
 
 def attribution(traces: dict[str, dict[str, dict]], baseline: str) -> str:
@@ -190,6 +252,28 @@ def main() -> None:
     problems = health_checks(by_config)
     print("\n## Health checks\n")
     print("\n".join(f"- {p}" for p in problems) if problems else "- all clear")
+
+    grades = load_grades()
+    if traces:
+        lenient = gold_sets(
+            traces, grades, min_grade=0
+        )  # every curated label, as the harness scores
+        n_lenient = sum(len(v) for v in lenient.values())
+        print(
+            f"\n## Retrieval vs lenient gold: all curated labels "
+            f"({len(lenient)} questions, {n_lenient} papers)\n"
+        )
+        print(retrieval_table(traces, lenient, args.baseline))
+        if grades:
+            strict = gold_sets(traces, grades, min_grade=2)
+            n_strict = sum(len(v) for v in strict.values())
+            print(
+                f"\n## Retrieval vs strict gold: directly answers "
+                f"({len(strict)} questions, {n_strict} papers)\n"
+            )
+            print(retrieval_table(traces, strict, args.baseline))
+        else:
+            print("\n(no graded gold yet: run scripts/grade_gold.py for the strict table)")
 
     if traces:
         print(f"\n## Agentic attribution (baseline: {args.baseline})\n")

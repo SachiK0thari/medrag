@@ -126,3 +126,11 @@ def test_track_usage_collects_nested_calls(fake_client):
     # Buckets are popped on exit: a later call is not recorded anywhere.
     llm.complete("s", "u")
     assert len(outer) == 3
+
+
+def test_request_timeout_defaults_to_setting_and_can_be_overridden(fake_client):
+    c = fake_client()
+    llm.complete("sys", "user")
+    assert c.kwargs["timeout"] == llm.get_settings().llm_timeout_s
+    llm.complete("sys", "user", timeout_s=300.0)
+    assert c.kwargs["timeout"] == 300.0
