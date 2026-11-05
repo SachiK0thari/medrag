@@ -37,7 +37,7 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
-from medrag.config import get_settings
+from medrag.config import DATA_DIR
 from medrag.eval.metrics import (
     mean_reciprocal_rank,
     ndcg_at_k,
@@ -234,10 +234,11 @@ def per_question_diffs(traces: dict[str, dict[str, dict]], baseline: str, config
 
 
 def main() -> None:
-    data_dir = get_settings().data_dir
+    # Paths come from the module constant, not Settings: Settings requires API
+    # keys, and this script has to run from a fresh clone that has none.
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--results", type=Path, default=data_dir / "eval_results.csv")
-    parser.add_argument("--traces", type=Path, default=data_dir / "eval_traces.jsonl")
+    parser.add_argument("--results", type=Path, default=DATA_DIR / "eval_results.csv")
+    parser.add_argument("--traces", type=Path, default=DATA_DIR / "eval_traces.jsonl")
     parser.add_argument("--baseline", default="hybrid_reranked")
     parser.add_argument("--diff", default="agentic_v2", help="Config to diff against baseline.")
     args = parser.parse_args()
