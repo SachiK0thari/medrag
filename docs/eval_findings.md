@@ -19,8 +19,8 @@ Reproduce with `python scripts/debug_agentic.py --variants agentic,agentic_v2`
 | agentic v1 (unmodified loop) | 0.467 | 17 / 30 | 3.7 |
 | agentic_v2 (fixes below) | 0.733 | 1 / 30 | 1.4 |
 
-v1 lost 0.27 recall. v2 recovers all of it, with fewer sub-queries and fewer
-LLM calls than v1.
+v1 lost 0.27 recall. v2 recovers all of it with fewer sub-queries, and so
+fewer retrieval and rerank passes, than v1. The LLM call count is unchanged.
 
 ## Three hypotheses, one ablation each
 
@@ -102,9 +102,10 @@ What the agentic loop buys instead:
 - A reflection safety net that triggers rarely and cheaply.
 - Per-step traces that made this analysis possible in one afternoon.
 
-What it costs: roughly three LLM calls per question (decompose, reflect,
-answer) against one for the baseline, so about 2× the tokens for equal
-recall on this question set.
+What it costs: three LLM calls per question (decompose, reflect, answer)
+against one for the baseline. The reflect call carries the retrieved sources,
+so total input tokens run 2–3× the baseline for equal recall on this question
+set.
 
 ## Next steps the data points to
 
