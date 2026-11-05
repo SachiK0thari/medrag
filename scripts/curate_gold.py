@@ -60,8 +60,13 @@ from medrag.store import Store
 #
 # The judge runs with reasoning ON: curation quality matters and latency does
 # not. Reasoning tokens count against max_tokens, so the cap is generous; a
-# 384-token cap once truncated every reply to an empty string.
-JUDGE_MAX_TOKENS = 4000
+# 384-token cap once truncated every reply to an empty string, and 4000 was
+# still not enough for ~1 question in 3 (the model deliberates over a 27-paper
+# pool). If even this cap is exhausted, the question is retried once with
+# reasoning OFF so it still gets labelled; the audit file records which mode
+# produced each label.
+JUDGE_MAX_TOKENS = 16000
+JUDGE_FALLBACK_MAX_TOKENS = 1000
 PER_RETRIEVER_POOL_SIZE = 15  # unique papers taken from EACH of BM25 and dense
 ABSTRACT_MAX_CHARS = 500
 REQUEST_SLEEP_SEC = 2.0
@@ -151,19 +156,34 @@ def _render_candidates(papers: list[Paper]) -> str:
     return "\n\n".join(blocks)
 
 
-def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> str:
-    """Retry on 429/413 rate-limit errors, honouring the retry-after header."""
+def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> tuple[str, str]:
+    """Ask the judge. Returns (reply text, judge mode: "reasoning" | "no_reasoning").
+
+    Retries on 429/413 rate-limit errors, honouring the retry-after header.
+    """
     for attempt in range(1, max_retries + 1):
         try:
             resp = llm.complete(
                 system, user, max_tokens=JUDGE_MAX_TOKENS, temperature=0.0, reasoning=True
             )
+            if not resp.truncated and resp.text.strip():
+                return resp.text, "reasoning"
+            print(
+                f"    judge exhausted {JUDGE_MAX_TOKENS} tokens reasoning "
+                f"(reasoning_tokens={resp.reasoning_tokens}); retrying without reasoning"
+            )
+            resp = llm.complete(
+                system,
+                user,
+                max_tokens=JUDGE_FALLBACK_MAX_TOKENS,
+                temperature=0.0,
+                reasoning=False,
+            )
             if resp.truncated or not resp.text.strip():
                 raise RuntimeError(
-                    f"empty/truncated judge reply (finish={resp.finish_reason}, "
-                    f"reasoning_tokens={resp.reasoning_tokens})"
+                    f"empty/truncated judge reply in both modes (finish={resp.finish_reason})"
                 )
-            return resp.text
+            return resp.text, "no_reasoning"
         except APIStatusError as e:
             if attempt == max_retries or e.status_code not in (413, 429):
                 raise
@@ -174,7 +194,7 @@ def _call_with_backoff(system: str, user: str, max_retries: int = 5) -> str:
                 f"    rate limited ({e.status_code}), attempt {attempt}/{max_retries}; sleeping {backoff}s"
             )
             time.sleep(backoff)
-    return ""  # unreachable, but satisfies mypy
+    return "", "reasoning"  # unreachable, but satisfies mypy
 
 
 def curate_one(
@@ -182,32 +202,33 @@ def curate_one(
     question: str,
     bm25: BM25Retriever,
     dense: DenseRetriever,
-) -> tuple[list[str], str, dict[str, str]]:
-    """Returns (gold PMIDs, one-line reasoning, pool provenance)."""
+) -> tuple[list[str], str, dict[str, str], str]:
+    """Returns (gold PMIDs, one-line reasoning, pool provenance, judge mode).
+
+    Raises on an unusable judge reply so the caller records the question as
+    failed (and a later resume retries it) rather than as "no gold exists".
+    """
     papers, provenance = build_pool(question, bm25, dense, seed=qid)
     if not papers:
-        return [], "no candidates from either retriever", provenance
+        return [], "no candidates from either retriever", provenance, "none"
     valid_pmids = set(provenance)
 
     user = f"QUESTION:\n{question}\n\nCANDIDATE POOL:\n{_render_candidates(papers)}"
-    text = _call_with_backoff(CURATION_SYSTEM, user)
+    text, mode = _call_with_backoff(CURATION_SYSTEM, user)
 
     raw = _extract_json(text, "{", "}")
     if raw is None:
-        return [], f"unparseable LLM output: {text[:120]}", provenance
-    try:
-        obj = json.loads(raw)
-    except json.JSONDecodeError as e:
-        return [], f"JSON decode error: {e}", provenance
+        raise RuntimeError(f"unparseable judge output: {text[:120]!r}")
+    obj = json.loads(raw)
 
     picks = obj.get("gold_pmids", [])
     reasoning = str(obj.get("reasoning", "")).strip()
     if not isinstance(picks, list):
-        return [], "gold_pmids not a list", provenance
+        raise RuntimeError("judge returned gold_pmids that is not a list")
 
     # Drop anything the LLM hallucinated outside the candidate pool.
     clean = [str(p) for p in picks if str(p) in valid_pmids]
-    return clean, reasoning, provenance
+    return clean, reasoning, provenance, mode
 
 
 def _dq(s: str) -> str:
@@ -292,7 +313,10 @@ def main() -> None:
         gold, reasoning = _load_existing_gold()
         if gold:
             print(f"resuming: {sum(1 for v in gold.values() if v)} questions already curated")
+    # Resume keeps the audit entries of questions that are not re-curated.
     audit: dict[str, dict[str, object]] = {}
+    if not args.force and AUDIT_PATH.exists():
+        audit = json.loads(AUDIT_PATH.read_text())
 
     for q in QUESTIONS:
         prior_note = reasoning.get(q.qid, "")
@@ -302,7 +326,7 @@ def main() -> None:
             continue
         print(f"  {q.qid}: {q.question[:80]}")
         try:
-            picks, note, provenance = curate_one(q.qid, q.question, bm25, dense)
+            picks, note, provenance, mode = curate_one(q.qid, q.question, bm25, dense)
         except Exception as e:  # checkpoint and continue on any failure
             print(f"    ERROR: {e}")
             gold[q.qid] = []
@@ -315,11 +339,12 @@ def main() -> None:
                 "pool": provenance,
                 "gold": {p: provenance[p] for p in picks},
                 "reasoning": note,
+                "judge_mode": mode,
             }
             AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
             AUDIT_PATH.write_text(json.dumps(audit, indent=2))
             sources = [provenance[p] for p in picks]
-            print(f"    → {picks}  from {sources}  ({note[:70]})")
+            print(f"    → {picks}  from {sources}  [{mode}]  ({note[:70]})")
 
         # Checkpoint after every question so a mid-run crash doesn't lose work.
         write_gold_module(gold, reasoning)
