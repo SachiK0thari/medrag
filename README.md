@@ -260,6 +260,7 @@ medrag/
 ├── src/medrag/
 │   ├── models.py           ← Pydantic data contracts
 │   ├── config.py           ← All env vars + tunables
+│   ├── ratelimit.py        ← Per-visitor + daily question limits
 │   ├── ingestion/          ← PubMed → PMC → chunk → embed
 │   ├── retrieval/          ← BM25 + dense + RRF + rerank
 │   ├── agent/              ← LangGraph loop, prompts, LLM wrapper
