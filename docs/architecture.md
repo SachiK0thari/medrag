@@ -84,6 +84,15 @@ against the query. It lifts MRR from 0.83 to 0.87 and recall@10 from 0.33 to
 value was ordering alone. It is also the slowest local step, about 4 seconds of
 the 5.7-second single-shot latency.
 
+On the free Hugging Face Space (two shared CPUs) the same model needs about
+2.2 seconds per pair, and an agent answer scores about 72 pairs: reranking was
+97% of a 167-second answer. The Space therefore sets `RERANKER_BACKEND=pinecone`,
+which sends the pairs to Pinecone's hosted copy of bge-reranker-v2-m3. On two
+test questions the hosted scores were within 0.004 of the local ones and the top
+10 came out in the same order. The hosted model has a monthly request quota;
+when a call fails the pairs are scored locally instead. The evaluation always
+uses the local model.
+
 **LangGraph for the agent.** An explicit state machine (decompose → retrieve →
 reflect → answer) in which every node appends to a per-step trace. That trace is
 why the agent is in the shape it is. On the abstracts-only corpus the first

@@ -51,6 +51,11 @@ assert n, 'the downloaded corpus has no chunks'; \
 print('corpus chunks:', n)" \
     && chmod -R a+rwX /tmp/medrag
 
+# Two shared CPUs need about 2.2 s per reranker pair (roughly 160 s an answer),
+# so the Space scores pairs with Pinecone's hosted copy of the same model. The
+# local model stays in the image as the fallback when the hosted quota runs out.
+ENV RERANKER_BACKEND=pinecone
+
 # HF Spaces expects port 7860
 ENV PORT=7860
 EXPOSE 7860

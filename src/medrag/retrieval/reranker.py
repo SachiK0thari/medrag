@@ -13,6 +13,14 @@ we therefore score in fixed-shape batches (`_plan_batches`): pairs are padded
 to a small ladder of lengths and every batch is filled to a constant size, so
 the set of shapes — and the memory — stays bounded. Scores are unchanged up to
 float noise because padding is masked out.
+
+Hosted backend: on two shared CPUs (the free Hugging Face Space) the model
+needs about 2.2 s per pair, and an agent answer scores about 72 pairs, so
+reranking was 97% of a 167-second answer. With ``RERANKER_BACKEND=pinecone``
+the pairs go to Pinecone's hosted copy of the same model instead (`_score_hosted`).
+On two test questions its scores were within 0.004 of the local model's and
+the top 10 came out in the same order. If the hosted call fails (the plan's
+monthly quota, an outage) the pairs are scored locally, slowly, instead.
 """
 
 from __future__ import annotations
@@ -26,9 +34,13 @@ from medrag.config import get_settings
 from medrag.models import RetrievalMethod, RetrievedChunk
 
 if TYPE_CHECKING:
+    from pinecone import Pinecone
     from sentence_transformers import CrossEncoder
 
 _log = logging.getLogger(__name__)
+
+# Pinecone's hosted reranker takes at most this many documents per request.
+_HOSTED_MAX_DOCS = 100
 
 # Fixed-shape scoring (MPS only). Pair lengths are rounded up to
 # _BASE_LENGTH * 2**n, and the batch size shrinks as the length grows so each
@@ -123,24 +135,70 @@ def _score_fixed_shape(model: CrossEncoder, query: str, texts: list[str]) -> lis
     return scores
 
 
+def _score_local(query: str, texts: list[str]) -> list[float]:
+    """Score (query, text) pairs with the cross-encoder loaded in this process."""
+    model = _load_model()
+    if model.model.device.type == "mps":
+        return _score_fixed_shape(model, query, texts)
+    return [float(s) for s in model.predict([(query, t) for t in texts], show_progress_bar=False)]
+
+
+@lru_cache(maxsize=1)
+def _pinecone_client() -> Pinecone:
+    from pinecone import Pinecone
+
+    return Pinecone(api_key=get_settings().pinecone_api_key.get_secret_value())
+
+
+def _score_hosted(query: str, texts: list[str]) -> list[float]:
+    """Score (query, text) pairs with Pinecone's hosted copy of the reranker.
+
+    Pinecone names its hosted models without the Hugging Face organisation
+    ("bge-reranker-v2-m3"). It accepts 1,024 tokens per pair; the chunker caps
+    a chunk at 512 embedder tokens (the longest is 549 reranker tokens), so
+    "truncate" is a guard and does not cut anything in this corpus.
+    """
+    model = get_settings().reranker_model.rsplit("/", 1)[-1]
+    scores = [0.0] * len(texts)
+    for start in range(0, len(texts), _HOSTED_MAX_DOCS):
+        batch = texts[start : start + _HOSTED_MAX_DOCS]
+        result = _pinecone_client().inference.rerank(
+            model=model,
+            query=query,
+            documents=batch,
+            top_n=len(batch),
+            return_documents=False,
+            parameters={"truncate": "END"},
+        )
+        for row in result.data:
+            scores[start + row.index] = float(row.score)
+    return scores
+
+
 class Reranker:
     """Cross-encoder reranker (BAAI/bge-reranker-v2-m3 by default)."""
 
     def __init__(self) -> None:
         self._settings = get_settings()
 
+    def _score(self, query: str, texts: list[str]) -> list[float]:
+        if self._settings.reranker_backend == "pinecone":
+            try:
+                return _score_hosted(query, texts)
+            except Exception as exc:
+                # Quota exhausted (429), outage, bad key: a slow answer beats none.
+                _log.warning(
+                    "hosted reranker failed (%s: %s); scoring %d pairs locally",
+                    type(exc).__name__,
+                    str(exc)[:200],
+                    len(texts),
+                )
+        return _score_local(query, texts)
+
     def rerank(self, query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
         if not chunks:
             return []
-        model = _load_model()
-        texts = [rc.chunk.text for rc in chunks]
-        if model.model.device.type == "mps":
-            scores = _score_fixed_shape(model, query, texts)
-        else:
-            scores = [
-                float(s)
-                for s in model.predict([(query, t) for t in texts], show_progress_bar=False)
-            ]
+        scores = self._score(query, [rc.chunk.text for rc in chunks])
         scored = sorted(
             zip(chunks, scores, strict=True),
             key=lambda kv: kv[1],
