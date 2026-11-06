@@ -268,7 +268,7 @@ medrag/
 │   ├── api/                ← FastAPI service
 │   └── ui/                 ← Streamlit demo
 ├── tests/                  ← pytest, runs in CI
-├── scripts/                ← ingest, run_eval, analyze_eval, plot_eval, curate_gold, grade_gold, extend_gold, record_demo
+├── scripts/                ← ingest, run_eval, analyze_eval, plot_eval, curate_gold, grade_gold, extend_gold, record_demo, upload_corpus
 ├── data/eval_results.csv   ← Committed eval run (with eval_traces.jsonl and two repeat runs)
 ├── data/eval_*_abstracts.* ← The earlier run on the abstracts-only corpus
 ├── docs/architecture.md    ← System diagram + design rationale
