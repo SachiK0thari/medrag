@@ -26,13 +26,16 @@ values explicitly so the benchmark keeps a true "before" row. See
   entities verbatim and returns a single sub-query for atomic questions.
 
 Every run records a per-sub-query ``trace`` (which PMIDs each sub-query
-surfaced) so regressions can be attributed to a specific planner output.
+surfaced) so regressions can be attributed to a specific planner output, and
+logs where its wall time went (LLM calls, search, cross-encoder reranking).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from typing import TYPE_CHECKING, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -62,6 +65,8 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 
+_log = logging.getLogger(__name__)
+
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
 
 
@@ -78,6 +83,10 @@ class AgentState(TypedDict, total=False):
     missing: str
     answer: Answer
     trace: list[TraceEntry]
+    # Seconds spent per stage ("llm", "search", "rerank", "setup") and the
+    # number of (query, chunk) pairs the cross-encoder scored.
+    timings: dict[str, float]
+    rerank_pairs: int
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +205,11 @@ def _confidence(citations: list[Citation], sources: list[RetrievedChunk]) -> flo
         return 0.2
     base = 0.5 + 0.1 * len(citations)
     return max(0.0, min(1.0, base))
+
+
+def _spent(timings: dict[str, float], stage: str, started: float) -> None:
+    """Add the time since `started` (a `perf_counter` reading) to `stage`."""
+    timings[stage] = timings.get(stage, 0.0) + time.perf_counter() - started
 
 
 def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -319,7 +333,10 @@ class MedRagAgent:
     def _decompose_node(self, state: AgentState) -> AgentState:
         question = state["question"]
         limit = self._settings.max_subqueries
+        timings = dict(state.get("timings", {}))
+        started = time.perf_counter()
         resp = llm.complete(self._decompose_system, question)
+        _spent(timings, "llm", started)
         sub_queries = _parse_sub_queries(resp.text, fallback=question, limit=limit)
         if self._keep_original_query:
             original = SubQuery(text=question, rationale="original question, searched verbatim")
@@ -334,22 +351,31 @@ class MedRagAgent:
                 "sub_queries": [sq.text for sq in sub_queries],
             }
         ]
-        return {"sub_queries": sub_queries, "trace": trace}
+        return {"sub_queries": sub_queries, "trace": trace, "timings": timings}
 
     def _retrieve_node(self, state: AgentState) -> AgentState:
-        hybrid = self._get_hybrid()
+        timings = dict(state.get("timings", {}))
+        pairs = state.get("rerank_pairs", 0)
+        started = time.perf_counter()
+        hybrid = self._get_hybrid()  # the first call loads the corpus and builds BM25
         reranker = self._get_reranker()
+        _spent(timings, "setup", started)
         already = state.get("n_retrieval_calls", 0)
         pending = state["sub_queries"][already:]
 
         trace = list(state.get("trace", []))
         new_chunks: list[RetrievedChunk] = []
         for sq in pending:
+            started = time.perf_counter()
             fused = hybrid.search(sq.text)
+            _spent(timings, "search", started)
             if not fused:
                 trace.append({"step": "retrieve", "sub_query": sq.text, "top_pmids": []})
                 continue
+            started = time.perf_counter()
             reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
+            _spent(timings, "rerank", started)
+            pairs += len(fused)
             new_chunks.extend(reranked)
             trace.append(
                 {
@@ -363,7 +389,10 @@ class MedRagAgent:
         if self._rerank_against_original and merged:
             # Re-score the whole accumulated pool against the user's question so
             # chunks from different sub-queries are ranked on a common scale.
+            started = time.perf_counter()
+            pairs += len(merged)
             merged = reranker.rerank(state["question"], merged, len(merged))
+            _spent(timings, "rerank", started)
         else:
             merged.sort(key=lambda rc: rc.score, reverse=True)
         trace.append(
@@ -378,6 +407,8 @@ class MedRagAgent:
             "retrieved": merged,
             "n_retrieval_calls": already + len(pending),
             "trace": trace,
+            "timings": timings,
+            "rerank_pairs": pairs,
         }
 
     def _reflect_node(self, state: AgentState) -> AgentState:
@@ -390,7 +421,10 @@ class MedRagAgent:
             return {"needs_more": False, "missing": "", "reflection_loops": loops + 1}
 
         user = f"Question: {state['question']}\n\nSources:\n{_render_sources(top)}"
+        timings = dict(state.get("timings", {}))
+        started = time.perf_counter()
         resp = llm.complete(REFLECT_SYSTEM, user, max_tokens=256)
+        _spent(timings, "llm", started)
         sufficient, missing = _parse_reflection(resp.text)
         trace = [
             *state.get("trace", []),
@@ -409,6 +443,7 @@ class MedRagAgent:
             "missing": missing,
             "reflection_loops": loops + 1,
             "trace": trace,
+            "timings": timings,
         }
 
     def _followup_node(self, state: AgentState) -> AgentState:
@@ -419,6 +454,8 @@ class MedRagAgent:
         return {"sub_queries": state["sub_queries"] + [follow_up]}
 
     def _answer_node(self, state: AgentState) -> AgentState:
+        timings = dict(state.get("timings", {}))
+        started = time.perf_counter()
         answer = generate_answer(
             question=state["question"],
             retrieved=state.get("retrieved", []),
@@ -426,7 +463,8 @@ class MedRagAgent:
             sub_queries=state.get("sub_queries", []),
             n_retrieval_calls=state.get("n_retrieval_calls", 1),
         )
-        return {"answer": answer}
+        _spent(timings, "llm", started)
+        return {"answer": answer, "timings": timings}
 
     # ---- graph ----------------------------------------------------------- #
 
@@ -490,9 +528,20 @@ class MedRagAgent:
             "needs_more": False,
             "missing": "",
             "trace": [],
+            "timings": {},
+            "rerank_pairs": 0,
         }
+        started = time.perf_counter()
         final = self._get_graph().invoke(initial)
         answer = final.get("answer")
         if not isinstance(answer, Answer):
             raise RuntimeError("agent graph terminated without producing an Answer")
+        stages = sorted(final.get("timings", {}).items(), key=lambda kv: kv[1], reverse=True)
+        _log.info(
+            "answered in %.1fs: %s; %d rerank pairs, %d sub-queries",
+            time.perf_counter() - started,
+            ", ".join(f"{stage} {seconds:.1f}s" for stage, seconds in stages),
+            final.get("rerank_pairs", 0),
+            len(answer.sub_queries),
+        )
         return list(final.get("retrieved", [])), answer, list(final.get("trace", []))
