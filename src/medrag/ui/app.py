@@ -10,6 +10,8 @@ import time
 import streamlit as st
 
 from medrag.agent.graph import MedRagAgent
+from medrag.config import MAX_QUESTION_CHARS, get_settings
+from medrag.ratelimit import client_from_forwarded, get_limiter
 
 st.set_page_config(
     page_title="MedRAG — GLP-1 Cardiovascular Literature Agent",
@@ -32,6 +34,12 @@ with st.sidebar:
         "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 33 held-out questions.\n\n"
         "[Source on GitHub](https://github.com/SachiK0thari/medrag)"
     )
+    _settings = get_settings()
+    if _settings.rate_limit_per_client > 0:
+        st.caption(
+            f"Public demo: limited to {_settings.rate_limit_per_client} questions per visitor "
+            f"every {_settings.rate_limit_window_s // 60} minutes to keep LLM costs bounded."
+        )
     st.divider()
     st.subheader("Example questions")
     examples = [
@@ -54,9 +62,23 @@ question = st.text_input(
     "Clinical question",
     value=st.session_state.get("question", ""),
     placeholder="e.g. What did the SELECT trial show about semaglutide in non-diabetic obesity?",
+    max_chars=MAX_QUESTION_CHARS,
 )
 
+
+def _check_rate_limit() -> None:
+    """Count this question against the limits; show why and stop if refused."""
+    # HF Spaces (and any reverse proxy) puts the visitor's address in
+    # X-Forwarded-For; without the header (local runs) everyone shares one key.
+    client = client_from_forwarded(st.context.headers.get("X-Forwarded-For"))
+    decision = get_limiter().acquire(client)
+    if not decision.allowed:
+        st.warning(decision.message)
+        st.stop()
+
+
 if st.button("Search", type="primary", disabled=not question):
+    _check_rate_limit()
     with st.spinner("Running agentic retrieval..."):
         t0 = time.perf_counter()
         agent = load_agent()

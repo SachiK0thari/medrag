@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from medrag import __version__
 from medrag.api import main as api
 from medrag.models import Answer
+from medrag.ratelimit import RateLimiter
 
 
 class StubAgent:
@@ -27,6 +28,14 @@ class StubAgent:
             n_retrieval_calls=1,
             total_chunks_considered=0,
         )
+
+
+@pytest.fixture(autouse=True)
+def limiter(monkeypatch: pytest.MonkeyPatch) -> RateLimiter:
+    """A fresh limiter per test, so tests never share the process-wide counts."""
+    fresh = RateLimiter(per_client=2, window_s=3600, global_per_day=100)
+    monkeypatch.setattr(api, "get_limiter", lambda: fresh)
+    return fresh
 
 
 @pytest.fixture
@@ -59,6 +68,30 @@ def test_ask_validates_input(client, payload):
     r = c.post("/ask", json=payload)
     assert r.status_code == 422
     assert stub.questions == []
+
+
+def test_ask_rate_limits_a_client(client):
+    c, stub = client
+    for _ in range(2):
+        assert c.post("/ask", json={"question": "What did LEADER show?"}).status_code == 200
+    r = c.post("/ask", json={"question": "What did LEADER show?"})
+    assert r.status_code == 429
+    assert 0 < int(r.headers["Retry-After"]) <= 3600
+    assert "limit" in r.json()["detail"]
+    assert len(stub.questions) == 2  # the refused request never reached the agent
+
+
+def test_invalid_input_does_not_use_up_the_limit(client):
+    c, _ = client
+    for _ in range(5):
+        assert c.post("/ask", json={"question": "ab"}).status_code == 422
+    assert c.post("/ask", json={"question": "What did LEADER show?"}).status_code == 200
+
+
+def test_health_is_not_rate_limited(client):
+    c, _ = client
+    for _ in range(5):
+        assert c.get("/health").status_code == 200
 
 
 def test_ask_maps_agent_failure_to_500(monkeypatch: pytest.MonkeyPatch):

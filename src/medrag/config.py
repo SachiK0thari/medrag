@@ -14,6 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 
+# Longest question the UI and API accept; bounds the tokens one request can spend.
+MAX_QUESTION_CHARS = 500
+
 
 class Settings(BaseSettings):
     """Application settings, populated from environment variables / .env."""
@@ -67,6 +70,11 @@ class Settings(BaseSettings):
     max_subqueries: int = 4
     max_reflection_loops: int = 2
     min_confidence_threshold: float = 0.6
+
+    # ---- Rate limiting (UI + API; see medrag.ratelimit) ------------------- #
+    rate_limit_per_client: int = 10  # questions per client per window (0 = off)
+    rate_limit_window_s: int = 3600
+    rate_limit_global_per_day: int = 200  # all clients, rolling 24 h (0 = off)
 
     # ---- Paths ------------------------------------------------------------ #
     data_dir: Path = DATA_DIR

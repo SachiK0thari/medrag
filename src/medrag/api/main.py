@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import math
+
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from medrag import __version__
 from medrag.agent.graph import MedRagAgent
+from medrag.config import MAX_QUESTION_CHARS
 from medrag.models import Answer
+from medrag.ratelimit import get_limiter
 
 app = FastAPI(
     title="medrag",
@@ -26,7 +30,7 @@ def get_agent() -> MedRagAgent:
 
 
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=3, max_length=500)
+    question: str = Field(..., min_length=3, max_length=MAX_QUESTION_CHARS)
 
 
 class HealthResponse(BaseModel):
@@ -40,7 +44,17 @@ def health() -> HealthResponse:
 
 
 @app.post("/ask", response_model=Answer)
-def ask(req: AskRequest) -> Answer:
+def ask(req: AskRequest, request: Request) -> Answer:
+    # Keyed on the peer address. Behind a reverse proxy, run uvicorn with
+    # --proxy-headers so this is the real client and not the proxy.
+    client = request.client.host if request.client else "unknown"
+    decision = get_limiter().acquire(client)
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=decision.message,
+            headers={"Retry-After": str(math.ceil(decision.retry_after_s))},
+        )
     try:
         return get_agent().answer(req.question)
     except Exception as e:
