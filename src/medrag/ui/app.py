@@ -19,8 +19,9 @@ st.set_page_config(
 
 st.title("MedRAG")
 st.caption(
-    "Agentic RAG over the abstracts of 498 recent PubMed papers on GLP-1 receptor "
-    "agonists and cardiovascular outcomes. Built for medical affairs literature review."
+    "Agentic RAG over 498 recent PubMed papers on GLP-1 receptor agonists and "
+    "cardiovascular outcomes, 278 of them with full text from PubMed Central. "
+    "Built for medical affairs literature review."
 )
 
 with st.sidebar:

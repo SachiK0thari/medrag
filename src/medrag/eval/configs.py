@@ -173,7 +173,10 @@ class HybridRerankedConfig:
 
     def run(self, question: str) -> EvalResult:
         fused = self._c.hybrid().search(question)
-        retrieved = self._c.reranker().rerank(question, fused, self._settings.rerank_top_k)
+        # Return every reranked candidate, not just the top-k chunks the answer
+        # is written from. The harness scores the papers behind those top-k
+        # chunks and records the whole ranking in the trace for analysis.
+        retrieved = self._c.reranker().rerank(question, fused, len(fused))
         answer = generate_answer(question, retrieved, top_k=self._settings.rerank_top_k)
         return EvalResult(retrieved=retrieved, answer=answer)
 

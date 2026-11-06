@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import csv
+import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -14,10 +17,13 @@ from medrag.eval.harness import (
     _percentile,
     _unique_preserving_order,
     estimate_cost_usd,
+    evaluate_config,
     read_results,
     summarize,
     write_results,
 )
+from medrag.eval.questions import EvalQuestion
+from medrag.models import Answer, Chunk, Paper, PaperSource, RetrievalMethod, RetrievedChunk
 
 
 def _row(config: str, qid: str, **over: object) -> EvalRow:
@@ -157,3 +163,58 @@ def test_load_kept_drops_only_the_configs_being_rerun(tmp_path: Path):
 
 def test_load_kept_with_no_previous_run_is_empty(tmp_path: Path):
     assert _load_kept(tmp_path / "none.csv", tmp_path / "none.jsonl", {"x"}) == ([], "")
+
+
+def _rc(pmid: str, idx: int) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk=Chunk(chunk_id=f"{pmid}-{idx}", pmid=pmid, text="t", chunk_index=idx, n_tokens=1),
+        paper=Paper(pmid=pmid, title="T", source=PaperSource.PUBMED_ABSTRACT),
+        score=1.0,
+        rank=1,
+        method=RetrievalMethod.HYBRID_RERANKED,
+    )
+
+
+def test_retrieval_is_scored_on_the_chunks_the_answer_saw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A gold paper below the top-k chunks cannot be cited, so it is not a hit.
+
+    Paper C is the third distinct paper in the ranking and would count under
+    "first 10 distinct papers", but nine chunks of paper A fill the context.
+    """
+    # Stand in for the RAGAS scorer, which needs the optional `eval` extra.
+    fake = types.SimpleNamespace(compute_faithfulness=lambda **_: 0.9)
+    monkeypatch.setitem(sys.modules, "medrag.eval.faithfulness", fake)
+
+    retrieved = [_rc("A", i) for i in range(9)] + [_rc("B", 0), _rc("C", 0), _rc("D", 0)]
+
+    class Config:
+        name = "stub"
+
+        def run(self, question: str) -> cfg_mod.EvalResult:
+            answer = Answer(
+                question=question,
+                text="An answer [1].",
+                citations=[],
+                confidence=0.5,
+                n_retrieval_calls=1,
+                total_chunks_considered=len(retrieved),
+            )
+            return cfg_mod.EvalResult(retrieved=retrieved, answer=answer)
+
+    questions = [
+        EvalQuestion(qid="q1", question="Q1?", gold_pmids=["B", "C"], category="x"),
+        EvalQuestion(qid="q2", question="Q2?", gold_pmids=[], category="x"),  # skipped
+    ]
+    trace_path = tmp_path / "traces.jsonl"
+    (row,) = evaluate_config(Config(), questions, trace_path=trace_path)
+
+    assert row.recall_at_10 == 0.5  # B is in the context, C is not
+    assert row.mrr == 0.5  # B is the second distinct paper the answer saw
+    assert row.faithfulness == 0.9
+
+    (record,) = (json.loads(line) for line in trace_path.read_text().splitlines())
+    assert record["context_pmids"] == ["A", "B"]
+    assert record["context_chunk_ids"] == [f"A-{i}" for i in range(9)] + ["B-0"]
+    assert record["ranked_pmids"] == ["A", "B", "C", "D"]

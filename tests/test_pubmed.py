@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from medrag.ingestion.pubmed import _parse_pubmed_xml
+from medrag.ingestion.pubmed import _parse_pubmed_xml, with_current_pmcids
 from medrag.models import Paper, PaperSource
 
 _REFERENCES = """
@@ -83,3 +83,20 @@ def test_a_record_without_a_pmid_is_skipped() -> None:
     good = _record("41000003", '<ArticleId IdType="pubmed">41000003</ArticleId>')
     bad = "<PubmedArticle><MedlineCitation><Article/></MedlineCitation></PubmedArticle>"
     assert [p.pmid for p in _parse(bad, good)] == ["41000003"]
+
+
+def test_with_current_pmcids_takes_only_the_pmc_id(sample_paper: Paper) -> None:
+    """A stored ID can be borrowed or out of date; the stored abstract is kept."""
+    borrowed = sample_paper.model_copy(update={"pmid": "1", "pmcid": "PMC4985288"})
+    deposited_later = sample_paper.model_copy(update={"pmid": "2", "pmcid": None})
+    not_returned = sample_paper.model_copy(update={"pmid": "3", "pmcid": "PMC333"})
+    fresh = [
+        borrowed.model_copy(update={"pmcid": None, "abstract": "Revised by PubMed."}),
+        deposited_later.model_copy(update={"pmcid": "PMC222"}),
+    ]
+
+    updated = with_current_pmcids([borrowed, deposited_later, not_returned], fresh)
+
+    assert [p.pmid for p in updated] == ["1", "2", "3"]
+    assert [p.pmcid for p in updated] == [None, "PMC222", "PMC333"]
+    assert all(p.abstract == sample_paper.abstract for p in updated)

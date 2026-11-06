@@ -60,3 +60,38 @@ def test_readable_from_other_threads(store: Store) -> None:
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: store.get_chunks(["c0", "c1"]), range(16)))
     assert all(set(r) == {"c0", "c1"} for r in results)
+
+
+def test_replace_chunks_removes_what_is_no_longer_produced(
+    store: Store, sample_paper: Paper
+) -> None:
+    """Re-chunking a paper must not leave its old chunks behind."""
+    other = sample_paper.model_copy(update={"pmid": "999"})
+    store.save_papers([other])
+    untouched = Chunk(
+        chunk_id="other-0", pmid="999", text="t", section="abstract", chunk_index=0, n_tokens=1
+    )
+    store.save_chunks([untouched])
+
+    new = [
+        Chunk(
+            chunk_id=cid,
+            pmid=sample_paper.pmid,
+            text=cid,
+            section="results",
+            chunk_index=i,
+            n_tokens=1,
+        )
+        for i, cid in enumerate(["c0", "new-1"])
+    ]
+    stale = store.replace_chunks([sample_paper.pmid], new)
+
+    assert stale == ["c1", "c2"]  # c0 is produced again, so it is not stale
+    assert [c.chunk_id for c in store.load_all_chunks()] == ["c0", "new-1", "other-0"]
+    assert store.get_chunks(["c0"])["c0"].section == "results"
+
+
+def test_replace_chunks_can_leave_a_paper_with_none(store: Store, sample_paper: Paper) -> None:
+    assert store.replace_chunks([sample_paper.pmid], []) == ["c0", "c1", "c2"]
+    assert store.count_chunks() == 0
+    assert store.count_papers() == 1

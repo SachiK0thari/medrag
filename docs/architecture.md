@@ -9,10 +9,10 @@
    PubMed E-utils│  esearch ──▶ efetch (XML) ──▶ Paper records         │
         │        │                          │                          │
         │        │                          ▼                          │
-   PMC OAI-PMH   │   Optional PMC full-text fetch                      │
+   PMC E-utils   │   PMC full text (JATS XML) where PMC has it         │
                  │                          │                          │
                  │                          ▼                          │
-                 │   Recursive section-aware chunker (≈384 tokens)     │
+                 │   Section-aware chunker (≈384 tokens, max 512)      │
                  │                          │                          │
                  │                          ▼                          │
                  │   bge-small-en-v1.5 embeddings (384-d, normalized)  │
@@ -56,50 +56,63 @@
 **PubMed/PMC over Google Search.** Structured metadata, free, rate-limited but
 predictable, gives MeSH terms for free, and PMC OA gives clean full-text XML
 without PDF parsing pain. Aligns with how a real medical-affairs tool would be built.
-The committed corpus does not get that far: a parser bug, since fixed, made the
-ingestion run discard every PMC body, so all 902 indexed chunks come from
-abstracts (see "What I'd do differently" in the README).
+The first ingestion run did not get that far: a parser bug made it discard
+every PMC body, so the first eval ran on 902 chunks of abstracts. With the
+parser fixed the corpus was rebuilt in place (`make reingest`), and 278 of the
+498 papers now carry full text, 8,647 chunks in all.
+
+**Chunks sized for the embedder.** The chunker packs paragraphs up to about
+384 tokens and splits a longer paragraph on sentence boundaries. Its budget is
+in characters, and a results paragraph dense with numbers runs to far more
+tokens per character than prose, so ingestion also counts each chunk with the
+embedding model's own tokenizer and halves any that exceed its 512-token
+limit. The embedder truncates silently, and the chunks it would have cut are
+the ones holding the hazard ratios.
 
 **bge-small-en-v1.5 embeddings.** 384-dim, runs on CPU, top of MTEB at its size
 class, no API cost. Keeps the per-query cost floor at the LLM calls alone.
 
 **Hybrid retrieval (BM25 + dense + RRF).** Dense alone misses exact-match queries
 (drug names, trial acronyms like LEADER, SUSTAIN-6). Sparse alone misses paraphrase.
-RRF is parameter-free and competitive with learned fusion. In the eval, hybrid
-beats either retriever alone on both gold sets (recall@10 0.60 against 0.49 for
-BM25 and 0.59 for dense).
+RRF is parameter-free and competitive with learned fusion. On the current
+corpus fused retrieval scores recall@10 0.33, against 0.29 for BM25 and 0.32
+for dense.
 
 **Cross-encoder reranker.** bge-reranker-v2-m3 re-scores the fused candidates
-against the query. Its measured value is ordering, not coverage: it lifts MRR on
-the strict gold set from 0.44 to 0.72 and adds only 0.03 to 0.05 recall, which is
-inside the noise. It is also the slowest local step, about 5 seconds of the
-6.6-second single-shot latency.
+against the query. It lifts MRR from 0.83 to 0.87 and recall@10 from 0.33 to
+0.40 (95% CI on the recall gain 0.03 to 0.10). On the abstracts-only corpus its
+value was ordering alone. It is also the slowest local step, about 4 seconds of
+the 5.7-second single-shot latency.
 
 **LangGraph for the agent.** An explicit state machine (decompose → retrieve →
 reflect → answer) in which every node appends to a per-step trace. That trace is
-why the agent is in the shape it is. The first version scored 0.20 recall@10
-below the single-shot pipeline it wraps, and the trace showed its sub-queries
-were finding more gold papers than the baseline and then losing them at the merge.
+why the agent is in the shape it is. On the abstracts-only corpus the first
+version scored 0.20 recall@10 below the single-shot pipeline it wraps, and the
+trace showed its sub-queries were finding more gold papers than the baseline and
+then losing them at the merge.
 
 **One rerank over the merged pool.** Each query's candidates are reranked
 against that query, but the merged pool is then re-scored against the user's
 original question. The first version sorted the merged pool by the per-query
 scores, and cross-encoder scores computed against different queries are not
 comparable, so a strong match for a tangential sub-query outranked a moderate
-match for the actual question. That one change closed the recall gap. See
-[`eval_findings.md`](eval_findings.md).
+match for the actual question. That one change closed the recall gap on the
+abstracts-only corpus, and on full text it recovers 0.07 recall and lifts MRR
+from 0.72 to 0.82. See [`eval_findings.md`](eval_findings.md).
 
 **A planner that is allowed to do nothing.** The planner is asked for the
 smallest set of queries, keeps trial and drug names verbatim, and the user's
 question is always searched as asked. Told to write 2 to 4 sub-queries, the first
 planner padded every question with aspects nobody asked about. Given the choice,
-it judged 32 of the 33 eval questions atomic.
+it adds one keyword restatement of the question and nothing else. Over three
+runs on the full-text corpus that scores the same as four sub-queries with the
+fixed merge, at half the latency.
 
 **OpenRouter + DeepSeek V4.1 Flash.** Cheap, fast, and the client speaks the
 OpenAI-compatible API, so swapping to Claude or GPT is one `LLM_MODEL` change.
 
 **Pinecone.** Serverless, so the demo has no vector store to host, and the free
-tier covers this corpus. At 902 chunks an in-process index would be just as
+tier covers this corpus. At 8,647 chunks an in-process index would be just as
 fast; a managed store is the part that would not change at a larger scale.
 
 ## Benchmarks

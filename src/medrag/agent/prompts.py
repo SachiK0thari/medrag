@@ -6,7 +6,9 @@ and so the eval harness can snapshot prompt versions alongside results.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "2026-11-v2"
+# v3: the answer and reflect prompts carry each source chunk in full. Up to v2
+# every source was cut to its first 600 characters (see `_render_sources`).
+PROMPT_VERSION = "2026-11-v3"
 
 DECOMPOSE_SYSTEM = """You are a medical research assistant planning a literature search.
 Given a clinical question, produce 2-4 focused sub-queries that together cover the question.

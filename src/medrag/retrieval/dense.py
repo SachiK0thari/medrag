@@ -16,6 +16,7 @@ from medrag.models import EmbeddedChunk, RetrievalMethod, RetrievedChunk
 from medrag.store import Store
 
 _UPSERT_BATCH = 100
+_DELETE_BATCH = 1000  # Pinecone's limit on IDs per delete request
 _INDEX_READY_POLL_SEC = 1.0
 _INDEX_READY_TIMEOUT_SEC = 120.0
 
@@ -106,6 +107,21 @@ class DenseRetriever:
             index.upsert(vectors=vectors)
             n += len(batch)
         return n
+
+    def delete(self, chunk_ids: list[str]) -> int:
+        """Delete vectors by chunk ID (the stale ones after a paper is re-chunked)."""
+        index = self._get_index()
+        for i in range(0, len(chunk_ids), _DELETE_BATCH):
+            index.delete(ids=chunk_ids[i : i + _DELETE_BATCH])
+        return len(chunk_ids)
+
+    def count_vectors(self) -> int:
+        """Vectors in the index, as Pinecone reports it (lags writes by a few seconds)."""
+        stats = self._get_index().describe_index_stats()
+        total = (
+            stats.get("total_vector_count") if isinstance(stats, dict) else stats.total_vector_count
+        )
+        return int(total or 0)
 
     # ---- query path ------------------------------------------------------ #
 

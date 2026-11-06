@@ -9,6 +9,7 @@ fails, keep their abstract-only state.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import NamedTuple
 
 import httpx
@@ -47,6 +48,11 @@ _SKIP_TAGS: frozenset[str] = frozenset(
 # Matching only the old value made every article look unidentified, so a run
 # fetched every body and kept none of them.
 _PMCID_ID_TYPES: tuple[str, ...] = ("pmcid", "pmc", "pmcaid")
+
+# What a citation leaves behind once its <xref> elements are dropped:
+# "as shown before [, , -]" or "(, )". Brackets holding only separators
+# (commas, semicolons, hyphens and the Unicode dashes U+2010 to U+2015).
+_EMPTY_CITATION_RE = re.compile(r"\s*[\[(][\s,;\-\u2010-\u2015]*[\])]")
 
 
 def _common_params() -> dict[str, str]:
@@ -200,13 +206,13 @@ def _render_body(element: etree._Element, lines: list[str]) -> None:
         if tag == "sec":
             title_el = next((c for c in child if _local(c) == "title"), None)
             if title_el is not None:
-                title = _inline_text(title_el).strip()
+                title = _one_line(_inline_text(title_el))
                 if title:
                     lines.append("")
                     lines.append(title)
             _render_body(child, lines)
         elif tag == "p":
-            text = _inline_text(child).strip()
+            text = _one_line(_inline_text(child))
             if text:
                 lines.append(text)
         elif tag == "title":
@@ -215,6 +221,17 @@ def _render_body(element: etree._Element, lines: list[str]) -> None:
         else:
             # Unknown container: recurse so we don't drop nested paragraphs.
             _render_body(child, lines)
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace so a paragraph or a title is exactly one line.
+
+    PMC XML is often pretty-printed, with line breaks inside a paragraph. The
+    chunker reads a line break as a paragraph boundary and a short line as a
+    possible section title, so those breaks must not survive. The empty
+    brackets left by dropped citation links go too.
+    """
+    return " ".join(_EMPTY_CITATION_RE.sub("", text).split())
 
 
 def _inline_text(element: etree._Element) -> str:

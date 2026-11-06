@@ -147,13 +147,19 @@ def _parse_reflection(text: str) -> tuple[bool, str]:
 
 
 def _render_sources(chunks: list[RetrievedChunk]) -> str:
+    """Numbered sources for the answer and reflect prompts, each chunk in full.
+
+    The chunker bounds a chunk at the embedder's 512 tokens, so ten of them fit
+    any model's context. An earlier version cut each source to its first 600
+    characters. An abstract states its results at the end, so of the 113
+    abstracts in the corpus that report an effect estimate, the model could see
+    it in 15.
+    """
     lines: list[str] = []
     for i, rc in enumerate(chunks, start=1):
         header = f"[{i}] {rc.paper.display_citation} (PMID {rc.paper.pmid})"
-        snippet = rc.chunk.text.strip().replace("\n", " ")
-        if len(snippet) > 600:
-            snippet = snippet[:600] + "..."
-        lines.append(f"{header}\n    {snippet}")
+        text = rc.chunk.text.strip().replace("\n", " ")
+        lines.append(f"{header}\n    {text}")
     return "\n\n".join(lines)
 
 
@@ -169,16 +175,15 @@ def _extract_citations(answer_text: str, sources: list[RetrievedChunk]) -> list[
     citations: list[Citation] = []
     for n in used_markers:
         rc = sources[n - 1]
-        snippet = rc.chunk.text.strip().replace("\n", " ")
-        if len(snippet) > 400:
-            snippet = snippet[:400] + "..."
         citations.append(
             Citation(
                 marker=f"[{n}]",
                 pmid=rc.paper.pmid,
                 chunk_id=rc.chunk.chunk_id,
                 display_citation=rc.paper.display_citation,
-                snippet=snippet,
+                # The whole chunk, as the model read it: a reader checking a
+                # quoted figure has to be able to find it in the source shown.
+                snippet=rc.chunk.text.strip().replace("\n", " "),
             )
         )
     return citations
