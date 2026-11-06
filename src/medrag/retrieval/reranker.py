@@ -17,6 +17,8 @@ float noise because padding is masked out.
 
 from __future__ import annotations
 
+import logging
+import os
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -25,6 +27,8 @@ from medrag.models import RetrievalMethod, RetrievedChunk
 
 if TYPE_CHECKING:
     from sentence_transformers import CrossEncoder
+
+_log = logging.getLogger(__name__)
 
 # Fixed-shape scoring (MPS only). Pair lengths are rounded up to
 # _BASE_LENGTH * 2**n, and the batch size shrinks as the length grows so each
@@ -64,10 +68,22 @@ def _plan_batches(lengths: list[int], max_length: int) -> list[tuple[int, int, l
 
 @lru_cache(maxsize=1)
 def _load_model() -> CrossEncoder:
+    import torch
     from sentence_transformers import CrossEncoder
 
     settings = get_settings()
-    return CrossEncoder(settings.reranker_model)
+    model = CrossEncoder(settings.reranker_model)
+    # On CPU the thread count against the cores actually granted decides the
+    # speed: a container can report its host's cores while being limited to two.
+    _log.info(
+        "reranker %s on %s: %d torch threads, %s CPUs visible (%s usable)",
+        settings.reranker_model,
+        model.model.device.type,
+        torch.get_num_threads(),
+        os.cpu_count(),
+        len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else "unknown",
+    )
+    return model
 
 
 def _score_fixed_shape(model: CrossEncoder, query: str, texts: list[str]) -> list[float]:

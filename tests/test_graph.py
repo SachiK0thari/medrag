@@ -261,6 +261,22 @@ def test_happy_path_produces_cited_answer_and_trace(scripted_llm):
     assert steps == ["decompose", "retrieve", "retrieve", "merge", "reflect"]
 
 
+def test_each_answer_logs_where_its_time_went(scripted_llm, caplog):
+    scripted_llm(decompose='[{"text": "sq1"}, {"text": "sq2"}]')
+    hybrid = FakeHybrid({"sq1": [_rc("11"), _rc("12")], "sq2": [_rc("21")]})
+    agent = _agent(hybrid, FakeReranker(), rerank_against_original=True)
+
+    with caplog.at_level("INFO", logger="medrag.agent.graph"):
+        agent.answer("Q?")
+
+    (line,) = (r.getMessage() for r in caplog.records if r.name == "medrag.agent.graph")
+    assert line.startswith("answered in ")
+    for stage in ("llm", "search", "rerank", "setup"):
+        assert f"{stage} " in line
+    # 2 + 1 candidates scored per sub-query, then the 3 merged chunks re-scored.
+    assert "6 rerank pairs, 2 sub-queries" in line
+
+
 def test_run_matches_run_with_trace_minus_trace(scripted_llm):
     scripted_llm()
     hybrid = FakeHybrid({"sq1": [_rc("1")]})

@@ -5,6 +5,7 @@ Run with: streamlit run src/medrag/ui/app.py
 
 from __future__ import annotations
 
+import logging
 import time
 
 import streamlit as st
@@ -12,6 +13,16 @@ import streamlit as st
 from medrag.agent.graph import MedRagAgent
 from medrag.config import MAX_QUESTION_CHARS, get_settings
 from medrag.ratelimit import client_from_forwarded, get_limiter
+
+# Send medrag's INFO logs (where each answer's time went) to the container log.
+# Streamlit re-runs this script on every interaction, hence the guard.
+_log = logging.getLogger("medrag")
+if not _log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s: %(message)s"))
+    _log.addHandler(_handler)
+    _log.setLevel(logging.INFO)
+    _log.propagate = False
 
 st.set_page_config(
     page_title="MedRAG — GLP-1 Cardiovascular Literature Agent",
