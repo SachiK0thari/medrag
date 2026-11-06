@@ -1,3 +1,4 @@
+<!--
 ---
 title: Medrag
 emoji: 👀
@@ -9,6 +10,7 @@ pinned: false
 license: mit
 short_description: Agentic RAG over GLP-1 cardiovascular literature
 ---
+-->
 
 # MedRAG — Agentic RAG over GLP-1 Cardiovascular Outcome Literature
 
