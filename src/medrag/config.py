@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +51,11 @@ class Settings(BaseSettings):
 
     # ---- Reranker --------------------------------------------------------- #
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    # "local" runs the cross-encoder in this process. "pinecone" sends the pairs
+    # to Pinecone's hosted copy of the same model: same ranking, about a second
+    # per request where two shared CPUs need a minute, but limited by the plan's
+    # monthly rerank quota. Falls back to "local" when the hosted call fails.
+    reranker_backend: Literal["local", "pinecone"] = "local"
     rerank_top_k: int = 10
 
     # ---- Pinecone --------------------------------------------------------- #
