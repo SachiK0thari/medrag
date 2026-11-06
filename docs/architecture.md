@@ -146,3 +146,4 @@ files into every table quoted in the docs.
 | `medrag.eval.harness` | Per-config evaluation runner |
 | `medrag.api.main` | FastAPI service |
 | `medrag.ui.app` | Streamlit demo |
+| `medrag.ratelimit` | Per-visitor and daily question limits for the UI and API |
