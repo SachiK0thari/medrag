@@ -11,16 +11,19 @@ Configs benchmarked (see `medrag.eval.configs`):
     - agentic_v2       (shipping combination)
 
 Per question and per config we record:
-    - recall@10, MRR, nDCG@10 — retrieval quality vs gold PMIDs
+    - recall@10, MRR, nDCG@10 — retrieval quality vs gold PMIDs, scored on the
+      answer's context: the papers behind the top-k chunks the answer was
+      written from (k = `rerank_top_k`, 10)
     - faithfulness — claim-level grounding of the generated answer
     - input_tokens, output_tokens, cost_usd — LLM spend for this pass
     - latency_ms — wall-clock time for run()
 
 Output:
     - data/eval_results.csv with one row per (config, question)
-    - data/eval_traces.jsonl with, per (config, question), the ranked PMIDs,
-      the agent's sub-queries and per-step trace, and the answer text — the
-      raw material for `scripts/analyze_eval.py`
+    - data/eval_traces.jsonl with, per (config, question), the PMIDs and chunk
+      IDs of the answer's context, the config's whole ranking as distinct
+      PMIDs, the agent's sub-queries and per-step trace, and the answer text —
+      the raw material for `scripts/analyze_eval.py`
     - printed summary table aggregated by config (means + p50 latency)
 
 Both files are checkpointed after every config, so a crash late in a long
@@ -147,15 +150,21 @@ def evaluate_config(
             result = config.run(q.question)
         latency_ms = (time.perf_counter() - t0) * 1000
 
-        # Dedupe PMIDs while preserving rank order: retrievers return chunks,
-        # not papers, and a paper with several relevant chunks would otherwise
-        # crowd out unique papers in the top-10 and depress recall@10.
-        retrieved_pmids = _unique_preserving_order([rc.paper.pmid for rc in result.retrieved])
         gold = set(q.gold_pmids)
 
-        # Faithfulness is scored over the same top-k the answerer saw.
+        # Retrieval is scored on what the answerer saw: the top-k chunks. A
+        # gold paper ranked below them cannot be cited, however the config
+        # ranked it. Scoring the first 10 distinct papers of each config's
+        # whole ranking instead compared lists of different lengths (10 chunks
+        # are about 8 papers on the full-text corpus, and some configs return
+        # 10 chunks while others return 30 or more).
         settings = get_settings()
         top_k_contexts = result.retrieved[: settings.rerank_top_k]
+        context_pmids = _unique_preserving_order([rc.paper.pmid for rc in top_k_contexts])
+        # The whole ranking, as distinct papers, kept in the trace for analysis.
+        retrieved_pmids = _unique_preserving_order([rc.paper.pmid for rc in result.retrieved])
+
+        # Faithfulness is scored over the same top-k.
         faithfulness = compute_faithfulness(
             question=q.question,
             answer_text=result.answer.text,
@@ -177,9 +186,9 @@ def evaluate_config(
             EvalRow(
                 config=config.name,
                 qid=q.qid,
-                recall_at_10=recall_at_k(retrieved_pmids, gold, k=10),
-                mrr=mean_reciprocal_rank(retrieved_pmids, gold),
-                ndcg_at_10=ndcg_at_k(retrieved_pmids, gold, k=10),
+                recall_at_10=recall_at_k(context_pmids, gold, k=10),
+                mrr=mean_reciprocal_rank(context_pmids, gold),
+                ndcg_at_10=ndcg_at_k(context_pmids, gold, k=10),
                 faithfulness=faithfulness,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -195,6 +204,8 @@ def evaluate_config(
                 "qid": q.qid,
                 "question": q.question,
                 "gold": sorted(gold),
+                "context_pmids": context_pmids,
+                "context_chunk_ids": [rc.chunk.chunk_id for rc in top_k_contexts],
                 "ranked_pmids": retrieved_pmids,
                 "trace": result.trace,
                 "answer": result.answer.text,

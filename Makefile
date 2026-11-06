@@ -1,4 +1,4 @@
-.PHONY: install dev lint format type test ingest eval plot api ui clean
+.PHONY: install dev lint format type test test-all ingest reingest eval plot api ui clean
 
 install:
 	pip install -e .
@@ -26,6 +26,10 @@ test-all:
 
 ingest:
 	python scripts/ingest.py
+
+# Rebuild full text, chunks and vectors for the papers already stored.
+reingest:
+	python scripts/ingest.py --in-place
 
 eval:
 	python scripts/run_eval.py

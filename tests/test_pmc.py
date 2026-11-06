@@ -86,6 +86,35 @@ def test_body_text_keeps_section_titles_and_skips_noise() -> None:
     assert "typesetter" not in text
 
 
+def test_a_paragraph_is_one_line_however_the_xml_is_wrapped() -> None:
+    """The chunker reads a line break as a paragraph boundary.
+
+    The fixture's first paragraph breaks after "in", as pretty-printed PMC XML
+    does, and that break used to survive into the text.
+    """
+    article = _parse_pmc_articleset(_articleset(_article(_CURRENT_IDS)))["1234567"]
+    assert article.text.split("\n") == [
+        "Introduction",
+        "GLP-1 receptor agonists reduce cardiovascular events in people with type 2 "
+        "diabetes. The effect is consistent.",
+        "Results",
+        "MACE occurred in 13.0% versus 14.9%.",
+    ]
+
+
+def test_brackets_emptied_by_dropped_citations_are_removed() -> None:
+    body = """
+    <body><sec><title>Discussion</title>
+      <p>Seen in earlier trials [<xref rid="r1">1</xref>, <xref rid="r2">2</xref>&#8211;<xref
+      rid="r4">4</xref>] and in a registry (<xref rid="r5">5</xref>). MACE fell
+      (HR 0.74 [95% CI 0.58-0.95]).</p>
+    </sec></body>"""
+    article = _parse_pmc_articleset(_articleset(_article(_CURRENT_IDS, body=body)))["1234567"]
+    assert article.text.split("\n")[1] == (
+        "Seen in earlier trials and in a registry. MACE fell (HR 0.74 [95% CI 0.58-0.95])."
+    )
+
+
 def test_article_without_body_or_id_is_skipped() -> None:
     no_body = _article(_CURRENT_IDS, body="")
     no_id = _article('<article-id pub-id-type="doi">10.1/x</article-id>')

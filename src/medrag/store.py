@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_pmid ON chunks(pmid);
 """
 
+_INSERT_CHUNK = (
+    "INSERT OR REPLACE INTO chunks (chunk_id, pmid, section, chunk_index, text, json) "
+    "VALUES (?, ?, ?, ?, ?, ?)"
+)
+
+# IDs per statement; SQLite builds before 3.32 allow 999 bound parameters.
+_SQL_BATCH = 500
+
+
+def _chunk_rows(chunks: Iterable[Chunk]) -> list[tuple[str, str, str | None, int, str, str]]:
+    return [
+        (c.chunk_id, c.pmid, c.section, c.chunk_index, c.text, c.model_dump_json()) for c in chunks
+    ]
+
 
 class Store:
     """SQLite-backed persistence for papers and chunks."""
@@ -90,26 +104,34 @@ class Store:
         return len(rows)
 
     def save_chunks(self, chunks: Iterable[Chunk]) -> int:
-        rows = [
-            (
-                c.chunk_id,
-                c.pmid,
-                c.section,
-                c.chunk_index,
-                c.text,
-                c.model_dump_json(),
-            )
-            for c in chunks
-        ]
+        rows = _chunk_rows(chunks)
         with self._lock:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO chunks "
-                "(chunk_id, pmid, section, chunk_index, text, json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+            self._conn.executemany(_INSERT_CHUNK, rows)
             self._conn.commit()
         return len(rows)
+
+    def replace_chunks(self, pmids: Iterable[str], chunks: Iterable[Chunk]) -> list[str]:
+        """Make `chunks` the complete chunk set of the papers in `pmids`.
+
+        `save_chunks` only adds or overwrites by ID, so a paper that is chunked
+        again would keep every old chunk whose ID is not produced any more.
+        This removes those in the same transaction and returns their IDs, which
+        the caller needs to delete the matching vectors from Pinecone.
+        """
+        pmid_list = list(pmids)
+        rows = _chunk_rows(chunks)
+        old_ids: set[str] = set()
+        with self._lock, self._conn:  # one transaction: all of it or none
+            for i in range(0, len(pmid_list), _SQL_BATCH):
+                batch = pmid_list[i : i + _SQL_BATCH]
+                placeholders = ",".join("?" * len(batch))
+                found = self._conn.execute(
+                    f"SELECT chunk_id FROM chunks WHERE pmid IN ({placeholders})", batch
+                )
+                old_ids.update(row["chunk_id"] for row in found)
+                self._conn.execute(f"DELETE FROM chunks WHERE pmid IN ({placeholders})", batch)
+            self._conn.executemany(_INSERT_CHUNK, rows)
+        return sorted(old_ids - {row[0] for row in rows})
 
     # ---- reads ----------------------------------------------------------- #
 

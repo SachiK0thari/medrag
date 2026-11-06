@@ -24,6 +24,19 @@ def _load_model() -> SentenceTransformer:
     return SentenceTransformer(settings.embedding_model)
 
 
+def max_input_tokens() -> int:
+    """Longest input, in tokens, the embedding model reads before it truncates."""
+    return int(_load_model().max_seq_length)
+
+
+def count_tokens(text: str) -> int:
+    """Tokens the embedding model sees for `text`, special tokens included."""
+    # verbose=False: the tokenizer otherwise warns about every text over the
+    # limit, and finding those is the reason for counting.
+    encoded = _load_model().tokenizer(text, truncation=False, verbose=False)
+    return len(encoded["input_ids"])
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
     """Embed a list of texts. Returns unit-normalized float vectors."""
     if not texts:

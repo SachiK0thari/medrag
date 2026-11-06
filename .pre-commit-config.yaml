@@ -13,6 +13,6 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
-        exclude: ^(uv\.lock|data/eval_traces\.jsonl|docs/demo\.gif)$
+        exclude: ^(uv\.lock|data/eval_traces(_abstracts)?\.jsonl|docs/demo\.gif)$
       - id: check-merge-conflict
       - id: detect-private-key

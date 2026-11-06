@@ -1,14 +1,18 @@
 """Draw the cost-quality chart embedded in the README.
 
-Reads `data/eval_results.csv` (one row per config and question) and plots,
-per config, mean retrieval quality against the two things it costs:
+Reads `data/eval_results.csv` (cost and latency, one row per config and
+question) and `data/eval_traces.jsonl` (the saved rankings) and plots, per
+config, mean retrieval quality against the two things it costs:
 
     left panel    mean billed USD per query
     right panel   p50 latency, log scale
 
-The panels share one y axis. The shaded band is the hybrid + rerank baseline
-plus or minus the run-to-run noise of a single agentic run, so a point inside
-it is not distinguishable from the baseline.
+Quality is scored against the extended gold set (the curated labels plus the
+papers `scripts/extend_gold.py` graded as directly answering), the same set
+the README table uses. The panels share one y axis and the horizontal line is
+the hybrid + rerank baseline. A configuration that was run more than once is
+plotted at the mean of its runs, with a vertical bar from its lowest run to
+its highest.
 
 Writes a light and a dark PNG; the README picks one by colour scheme:
 
@@ -26,10 +30,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import math
 import statistics
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,22 +40,29 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from analyze_eval import (
+    gold_sets,
+    load_extension,
+    load_grades,
+    load_rows,
+    load_traces,
+    per_question,
+    per_run,
+    repeat_paths,
+    with_extension,
+)
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedLocator, FuncFormatter, MultipleLocator, NullLocator
 
 BASELINE = "hybrid_reranked"
 
-# Recall@10 gap between two agentic configs that are identical up to the first
-# merge (0.510 against 0.465): planner sampling noise at temperature 0.1.
-# See docs/eval_findings.md, "Reflection is not the cause".
-RECALL_NOISE = 0.045
-
 METRIC_LABELS = {
     "recall_at_10": "Recall@10",
     "ndcg_at_10": "nDCG@10",
     "mrr": "MRR",
 }
+METRIC_KEYS = {"recall_at_10": "recall", "ndcg_at_10": "ndcg", "mrr": "mrr"}
 
 SINGLE_SHOT, ABLATION, SHIPPED = "single_shot", "ablation", "shipped"
 
@@ -77,15 +86,15 @@ class Point:
 
 POINTS = {
     "bm25_only": Point("BM25 only", SINGLE_SHOT, (9, -3), (9, -3)),
-    "dense_only": Point("Dense only", SINGLE_SHOT, (9, -9), (9, -8)),
-    "hybrid_rrf": Point("Hybrid (RRF)", SINGLE_SHOT, (-9, 4), (9, 8)),
-    "hybrid_reranked": Point("Hybrid + rerank", SINGLE_SHOT, (9, 10), (-9, -10)),
-    "agentic": Point("Agentic v1", ABLATION, (-9, 5), (-9, 5)),
-    "agentic_keep_orig": Point("v1 + verbatim question", ABLATION, (-9, -8), (-9, -8)),
-    "agentic_no_reflect": Point("v1 without reflection", ABLATION, (9, -3), (-9, 5)),
-    "agentic_rerank_orig": Point("v1 + pool re-scored", ABLATION, (-2, 11), (-7, 11)),
-    "agentic_faithful": Point("v1 + v2 planner", ABLATION, (-9, 5), (-9, 9)),
-    "agentic_v2": Point("Agentic v2", SHIPPED, (4, -13), (9, -9)),
+    "dense_only": Point("Dense only", SINGLE_SHOT, (9, -6), (9, -8)),
+    "hybrid_rrf": Point("Hybrid (RRF)", SINGLE_SHOT, (9, 6), (9, 4)),
+    "hybrid_reranked": Point("Hybrid + rerank", SINGLE_SHOT, (9, 9), (-9, 9)),
+    "agentic": Point("Agentic v1", ABLATION, (-9, -8), (9, -9)),
+    "agentic_keep_orig": Point("v1 + verbatim question", ABLATION, (9, 0), (9, -5)),
+    "agentic_no_reflect": Point("v1 without reflection", ABLATION, (9, -6), (9, 6)),
+    "agentic_rerank_orig": Point("v1 + pool re-scored", ABLATION, (-9, 6), (-9, 6)),
+    "agentic_faithful": Point("v1 + v2 planner", ABLATION, (-9, 2), (-9, -4)),
+    "agentic_v2": Point("Agentic v2", SHIPPED, (9, 7), (9, -10)),
 }
 
 
@@ -125,15 +134,24 @@ DARK = Theme(
 )
 
 
-def summarise(path: Path, metric: str) -> dict[str, dict[str, float]]:
-    """config -> mean metric, mean USD per query, p50 latency in seconds."""
-    by_config: dict[str, list[dict[str, str]]] = defaultdict(list)
-    with path.open() as f:
-        for row in csv.DictReader(f):
-            by_config[row["config"]].append(row)
+def summarise(results: Path, traces_path: Path, metric: str) -> dict[str, dict[str, float]]:
+    """config -> mean metric against extended gold, mean USD per query, p50 latency (s).
+
+    Repeat runs next to the two files are included: quality is the mean over a
+    config's runs, cost and latency are taken over all of its rows.
+    """
+    by_config = load_rows([results, *repeat_paths(results)])
+    traces = load_traces(traces_path)
+    runs = [traces, *(load_traces(path) for path in repeat_paths(traces_path))]
+    extension, _ = load_extension()
+    gold = with_extension(gold_sets(traces, load_grades(), min_grade=0), extension)
     return {
         cfg: {
-            "quality": statistics.fmean(float(r[metric]) for r in rows),
+            "quality": statistics.fmean(per_question(runs, cfg, gold, METRIC_KEYS[metric])),
+            # Lowest and highest run, for configs that were run more than once
+            # (recall only: the other metrics have no per-run helper).
+            "low": min(per_run(runs, cfg, gold)),
+            "high": max(per_run(runs, cfg, gold)),
             "cost": statistics.fmean(float(r["cost_usd"]) for r in rows),
             "latency": statistics.median(float(r["latency_ms"]) for r in rows) / 1000,
         }
@@ -158,18 +176,18 @@ def _draw_panel(
     stats: dict[str, dict[str, float]],
     x_key: str,
     theme: Theme,
-    band: float | None,
+    show_runs: bool,
 ) -> None:
     _style_axes(ax, theme)
-    base = stats[BASELINE]["quality"]
-    if band is not None:
-        ax.axhspan(base - band, base + band, color=theme.band, linewidth=0, zorder=1)
-    ax.axhline(base, color=theme.axis, linewidth=1, zorder=1.5)
+    ax.axhline(stats[BASELINE]["quality"], color=theme.axis, linewidth=1, zorder=1.5)
 
     for cfg, point in POINTS.items():
         if cfg not in stats:
             continue
         x, y = stats[cfg][x_key], stats[cfg]["quality"]
+        low, high = stats[cfg]["low"], stats[cfg]["high"]
+        if show_runs and high > low:
+            ax.vlines(x, low, high, color=theme.colors[point.group], linewidth=2, zorder=2)
         ax.scatter(
             x,
             y,
@@ -200,20 +218,20 @@ def draw(stats: dict[str, dict[str, float]], metric: str, theme: Theme, out: Pat
     fig, (ax_cost, ax_lat) = plt.subplots(
         1, 2, figsize=(9.6, 5.0), sharey=True, facecolor=theme.surface
     )
-    # The noise estimate was measured on recall, so the band is drawn only there.
-    band = RECALL_NOISE if metric == "recall_at_10" else None
-    _draw_panel(ax_cost, stats, "cost", theme, band)
-    _draw_panel(ax_lat, stats, "latency", theme, band)
+    # Per-run values are computed for recall only.
+    show_runs = metric == "recall_at_10"
+    _draw_panel(ax_cost, stats, "cost", theme, show_runs)
+    _draw_panel(ax_lat, stats, "latency", theme, show_runs)
 
-    ax_cost.set_xlim(0.00018, 0.00082)
-    ax_cost.xaxis.set_major_locator(FixedLocator([0.0002, 0.0004, 0.0006, 0.0008]))
+    ax_cost.set_xlim(0.00045, 0.00208)
+    ax_cost.xaxis.set_major_locator(FixedLocator([0.0006, 0.0010, 0.0014, 0.0018]))
     ax_cost.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v:.4f}"))
     ax_cost.set_xlabel(
         "Cost per query (mean, USD as billed)", color=theme.ink_secondary, fontsize=9.5, labelpad=8
     )
 
     ax_lat.set_xscale("log")
-    ax_lat.set_xlim(0.8, 45)
+    ax_lat.set_xlim(0.8, 100)
     ax_lat.xaxis.set_major_locator(FixedLocator([1, 2, 5, 10, 20, 40]))
     ax_lat.xaxis.set_minor_locator(NullLocator())
     ax_lat.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g} s"))
@@ -223,25 +241,16 @@ def draw(stats: dict[str, dict[str, float]], metric: str, theme: Theme, out: Pat
 
     label = METRIC_LABELS[metric]
     values = [v["quality"] for v in stats.values()]
-    top = max(values) if band is None else max(max(values), stats[BASELINE]["quality"] + band)
-    ax_cost.set_ylim(math.floor((min(values) - 0.02) * 20) / 20, top + 0.025)
+    lows = [v["low"] for v in stats.values()] if show_runs else values
+    highs = [v["high"] for v in stats.values()] if show_runs else values
+    ax_cost.set_ylim(
+        math.floor((min(*values, *lows) - 0.02) * 20) / 20, max(*values, *highs) + 0.025
+    )
     ax_cost.yaxis.set_major_locator(MultipleLocator(0.05))
-    ax_cost.set_ylabel(label, color=theme.ink_secondary, fontsize=9.5, labelpad=8)
+    ax_cost.set_ylabel(
+        f"{label}, extended gold", color=theme.ink_secondary, fontsize=9.5, labelpad=8
+    )
     ax_cost.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.2f}"))
-
-    if band is not None:
-        base = stats[BASELINE]["quality"]
-        ax_lat.annotate(
-            f"baseline ± {band} run-to-run noise",
-            (1.0, base + band),
-            xycoords=("axes fraction", "data"),
-            xytext=(-4, 4),
-            textcoords="offset points",
-            ha="right",
-            va="bottom",
-            fontsize=8,
-            color=theme.ink_muted,
-        )
 
     fig.suptitle(
         f"{label} against what each configuration costs",
@@ -255,7 +264,8 @@ def draw(stats: dict[str, dict[str, float]], metric: str, theme: Theme, out: Pat
     fig.text(
         0.065,
         0.905,
-        "33 questions, one run per configuration. Higher is better; further left is cheaper or faster.",
+        "33 questions. Higher is better; further left is cheaper or faster. "
+        "A bar spans the three runs of a repeated configuration.",
         ha="left",
         fontsize=9.5,
         color=theme.ink_secondary,
@@ -295,11 +305,12 @@ def draw(stats: dict[str, dict[str, float]], metric: str, theme: Theme, out: Pat
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--results", type=Path, default=Path("data/eval_results.csv"))
+    parser.add_argument("--traces", type=Path, default=Path("data/eval_traces.jsonl"))
     parser.add_argument("--metric", choices=sorted(METRIC_LABELS), default="recall_at_10")
     parser.add_argument("--out", type=Path, default=Path("docs/eval_cost_quality.png"))
     args = parser.parse_args()
 
-    stats = summarise(args.results, args.metric)
+    stats = summarise(args.results, args.traces, args.metric)
     missing = sorted(set(stats) - set(POINTS))
     if missing:
         print(f"warning: no label defined for {missing}; they are not plotted")

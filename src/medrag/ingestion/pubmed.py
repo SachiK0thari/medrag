@@ -81,6 +81,23 @@ class PubMedClient:
         return papers
 
 
+def with_current_pmcids(stored: list[Paper], fresh: list[Paper]) -> list[Paper]:
+    """`stored` papers carrying the PMC ID that PubMed lists for them today.
+
+    Only the PMC ID is taken from `fresh`. A stored ID can be wrong (an earlier
+    parser bug copied one from the reference list) or out of date (a paper is
+    often deposited in PMC months after it is indexed in PubMed). Everything
+    else, the abstract included, stays as stored, because the eval's gold
+    labels were judged against the stored abstracts. A paper PubMed did not
+    return keeps its stored ID.
+    """
+    by_pmid = {p.pmid: p for p in fresh}
+    return [
+        p.model_copy(update={"pmcid": by_pmid[p.pmid].pmcid}) if p.pmid in by_pmid else p
+        for p in stored
+    ]
+
+
 def _parse_pubmed_xml(xml_bytes: bytes) -> list[Paper]:
     """Parse a PubmedArticleSet XML blob into Paper records."""
     root = etree.fromstring(xml_bytes)

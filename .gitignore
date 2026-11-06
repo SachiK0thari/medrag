@@ -41,6 +41,12 @@ data/*
 # offline with `python scripts/analyze_eval.py`.
 !data/eval_results.csv
 !data/eval_traces.jsonl
+# Repeat runs of the agentic configs the conclusions rest on.
+!data/eval_results_rep*.csv
+!data/eval_traces_rep*.jsonl
+# The earlier run on the abstracts-only corpus, which docs/eval_findings.md analyses.
+!data/eval_results_abstracts.csv
+!data/eval_traces_abstracts.jsonl
 
 # Streamlit
 .streamlit/secrets.toml

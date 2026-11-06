@@ -17,6 +17,7 @@ from medrag.agent.graph import (
     _extract_json,
     _parse_reflection,
     _parse_sub_queries,
+    _render_sources,
     _unique_pmids,
 )
 from medrag.agent.llm import LLMResponse
@@ -201,6 +202,27 @@ def test_extract_citations_filters_and_dedupes_in_order():
     assert [c.marker for c in cits] == ["[2]", "[1]"]
     assert cits[0].pmid == "2"
     assert cits[0].chunk_id == "2-0"
+
+
+def _long_rc() -> RetrievedChunk:
+    """A chunk whose result comes last, as it does in an abstract."""
+    rc = _rc("7")
+    text = "Background and methods. " * 60 + "\nMACE fell (HR 0.74, 95% CI 0.58 to 0.95)."
+    return rc.model_copy(update={"chunk": rc.chunk.model_copy(update={"text": text})})
+
+
+def test_sources_reach_the_prompt_in_full():
+    """Each source used to be cut at 600 characters, which hid the result."""
+    rendered = _render_sources([_long_rc(), _rc("8")])
+    assert rendered.startswith("[1] Lovelace 2024, J Test (PMID 7)\n    Background and methods.")
+    assert "MACE fell (HR 0.74, 95% CI 0.58 to 0.95)." in rendered
+    assert "\n\n[2] Lovelace 2024, J Test (PMID 8)\n    text of 8 chunk 0" in rendered
+
+
+def test_citation_snippet_is_the_whole_chunk_the_model_read():
+    (cit,) = _extract_citations("MACE fell [1].", [_long_rc()])
+    assert cit.snippet.endswith("MACE fell (HR 0.74, 95% CI 0.58 to 0.95).")
+    assert "\n" not in cit.snippet
 
 
 def test_dedupe_by_chunk_id_keeps_first_occurrence():
@@ -411,6 +433,32 @@ def test_generate_answer_slices_top_k(scripted_llm):
     assert answer.total_chunks_considered == 6
     assert answer.n_retrieval_calls == 1
     assert answer.sub_queries == []
+
+
+def test_hybrid_reranked_config_returns_every_candidate_and_answers_from_the_top_k(
+    scripted_llm,
+):
+    """The harness scores 10 distinct papers; 10 chunks can be fewer papers than that."""
+    from medrag.eval.configs import HybridRerankedConfig
+
+    # 30 fused chunks, three per paper: the top 10 chunks cover only 4 papers.
+    fused = [_rc(str(i // 3), idx=i % 3) for i in range(30)]
+    hybrid, reranker = FakeHybrid({"Q?": fused}), FakeReranker()
+
+    class Components:
+        def hybrid(self) -> FakeHybrid:
+            return hybrid
+
+        def reranker(self) -> FakeReranker:
+            return reranker
+
+    scripted_llm(answer="Cited [1] and [11].")
+    result = HybridRerankedConfig(Components()).run("Q?")  # type: ignore[arg-type]
+
+    assert len(result.retrieved) == 30
+    assert len({rc.paper.pmid for rc in result.retrieved}) == 10
+    # [11] is outside the ten chunks the answer was written from.
+    assert [c.marker for c in result.answer.citations] == ["[1]"]
 
 
 def test_invoke_raises_if_graph_yields_no_answer(scripted_llm, monkeypatch):
