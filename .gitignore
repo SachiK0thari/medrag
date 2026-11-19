@@ -47,6 +47,9 @@ data/*
 # The earlier run on the abstracts-only corpus, which docs/eval_findings.md analyses.
 !data/eval_results_abstracts.csv
 !data/eval_traces_abstracts.jsonl
+# The test split (20 questions never used for tuning) and its repeats.
+!data/eval_results_test*.csv
+!data/eval_traces_test*.jsonl
 
 # Streamlit
 .streamlit/secrets.toml

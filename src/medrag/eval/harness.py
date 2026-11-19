@@ -310,12 +310,14 @@ def run_all(
     out_path: Path | None = None,
     *,
     keep_existing: bool = False,
+    questions: list[EvalQuestion] | None = None,
 ) -> None:
     """Evaluate `configs` and write the CSV + traces.
 
     With `keep_existing`, rows and traces already on disk for configs that are
     not in `configs` are preserved, so a subset can be re-run (after a crash or
-    a fix) without repeating the whole benchmark.
+    a fix) without repeating the whole benchmark. `questions` defaults to the
+    development set; `medrag.eval.splits` supplies the test split.
     """
     settings = get_settings()
     out_path = out_path or settings.data_dir / "eval_results.csv"
@@ -335,7 +337,7 @@ def run_all(
     for cfg in configs:
         print(f"Evaluating {cfg.name}...", flush=True)
         t0 = time.perf_counter()
-        all_rows.extend(evaluate_config(cfg, QUESTIONS, trace_path=trace_path))
+        all_rows.extend(evaluate_config(cfg, questions or QUESTIONS, trace_path=trace_path))
         write_results(all_rows, out_path)  # checkpoint after every config
         print(f"  done in {time.perf_counter() - t0:.0f}s; checkpointed", flush=True)
 

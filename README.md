@@ -120,6 +120,31 @@ sub-queries with the fixed merge do no better than v2's one restatement
 per-step trace and no retrieval quality. The full analysis of both corpora is
 in [`docs/eval_findings.md`](docs/eval_findings.md).
 
+### On 20 questions never used for tuning
+
+v2's defaults were chosen by scoring ablations on the 33 questions above, so
+they are a development set, not a held-out one. A test split of 20 more
+questions was written afterwards, on topics the 33 do not cover: the SOUL and
+STRIDE trials, atrial fibrillation, aspiration under anesthesia, results by
+sex and age, and more ([`questions_test.py`](src/medrag/eval/questions_test.py)).
+Their text was fixed before any system ran on them, they were labelled by
+the same three scripts as the development set, and no code changed because
+of them.
+
+| Test split, 20 questions | Recall@10 | vs baseline (95% CI) | MRR | p50 latency |
+|---|---|---|---|---|
+| Hybrid + rerank (baseline) | 0.655 | — | 0.843 | 5.6 s |
+| **Agentic v2**, 3 runs | 0.632 | −0.023 (−0.057 to +0.009) | 0.837 | 13.1 s |
+
+The development result carries over: v2 does not beat the pipeline it
+wraps. On these questions it is nominally behind, in all three runs (0.626
+to 0.639), though the interval still includes zero. On the curated labels
+alone, before the extension, the gap is −0.032 (−0.100 to +0.033). Recall is
+higher than on the development set because these questions have fewer gold
+papers each, 7 against 12, so the two sets' absolute numbers are not
+comparable; the gap to the baseline is. Reproduce it with
+`python scripts/analyze_eval.py --split test`.
+
 ### What full text did for the answers
 
 | Agentic v2, 33 questions | Abstracts only | Full text |
@@ -179,6 +204,13 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
 
 ## How far to trust the evaluation numbers
 
+- **The 33 questions tuned the agent.** Every ablation was scored on them, so
+  the main table is development-set performance. The
+  [test split](#on-20-questions-never-used-for-tuning) of 20 untouched
+  questions checks it. Its 139 labels are not hand-checked yet, and 20
+  questions give wide intervals. Faithfulness is not compared on it: the
+  judge model hit its token cap on 9 of the 80 answers, against 1 of 99 on
+  the development runs.
 - **Gold labels are LLM-curated** from a pooled BM25 + dense candidate set
   (`scripts/curate_gold.py`). I hand-checked 28 of the 90 labels: none were
   irrelevant, 14 directly answer the question and 14 are only on topic.
@@ -253,6 +285,8 @@ make reingest      # later: rebuild the same papers in place (about 5 minutes)
 # 4. Evaluate
 make eval                        # writes data/eval_results.csv + eval_traces.jsonl
 python scripts/analyze_eval.py   # tables, confidence intervals, agent attribution
+python scripts/run_eval.py --split test --configs hybrid_reranked,agentic_v2
+python scripts/analyze_eval.py --split test   # the 20 questions never used for tuning
 python scripts/plot_eval.py      # docs/eval_cost_quality.png (light + dark)
 
 # 5. Run
@@ -275,7 +309,7 @@ medrag/
 │   ├── ingestion/          ← PubMed → PMC → chunk → embed
 │   ├── retrieval/          ← BM25 + dense + RRF + rerank
 │   ├── agent/              ← LangGraph loop, prompts, LLM wrapper
-│   ├── eval/               ← Metrics, harness, evaluation questions
+│   ├── eval/               ← Metrics, harness, dev + test questions
 │   ├── api/                ← FastAPI service
 │   └── ui/                 ← Streamlit demo
 ├── tests/                  ← pytest, runs in CI
@@ -318,7 +352,7 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 182 unit tests that run in under two seconds with no network and
+- **Tests** — 187 unit tests that run in under two seconds with no network and
   no model downloads. Line coverage is 83% overall and 95% on the agent graph;
   the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.

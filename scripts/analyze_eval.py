@@ -67,6 +67,7 @@ from medrag.eval.metrics import (
     paired_bootstrap_ci,
     recall_at_k,
 )
+from medrag.eval.splits import SPLITS, SplitFiles, load_generated, split_files
 
 K = 10
 
@@ -203,26 +204,25 @@ def health_checks(by_config: dict[str, list[dict[str, str]]]) -> list[str]:
     return problems
 
 
-def load_grades() -> dict[str, dict[str, int]]:
+def load_grades(files: SplitFiles) -> dict[str, dict[str, int]]:
     """qid -> pmid -> grade (2 direct, 1 related, 0 irrelevant); {} if not graded yet."""
-    try:
-        from medrag.eval.gold_grades import GOLD_GRADES
-    except ImportError:
-        return {}
-    return GOLD_GRADES
+    loaded = load_generated(files, "gold_grades", "GOLD_GRADES")
+    return loaded[0] if loaded else {}
 
 
-def load_extension() -> tuple[dict[str, dict[str, int]], dict[str, set[str]]]:
+def load_extension(
+    files: SplitFiles,
+) -> tuple[dict[str, dict[str, int]], dict[str, set[str]]]:
     """Grades for papers judged after the re-ingest, and the pool judged before it.
 
     Returns (qid -> pmid -> grade, qid -> PMIDs the original curation judged);
     both empty if `scripts/extend_gold.py` has never run.
     """
-    try:
-        from medrag.eval.gold_extension import EXTENSION_GRADES, ORIGINAL_POOL
-    except ImportError:
+    loaded = load_generated(files, "gold_extension", "EXTENSION_GRADES", "ORIGINAL_POOL")
+    if loaded is None:
         return {}, {}
-    return EXTENSION_GRADES, {qid: set(pmids) for qid, pmids in ORIGINAL_POOL.items()}
+    extension, pool = loaded
+    return extension, {qid: set(pmids) for qid, pmids in pool.items()}
 
 
 def with_extension(
@@ -434,8 +434,15 @@ def main() -> None:
     # Paths come from the module constant, not Settings: Settings requires API
     # keys, and this script has to run from a fresh clone that has none.
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--results", type=Path, default=DATA_DIR / "eval_results.csv")
-    parser.add_argument("--traces", type=Path, default=DATA_DIR / "eval_traces.jsonl")
+    parser.add_argument(
+        "--split",
+        choices=SPLITS,
+        default="dev",
+        help="Question set: dev (the 33 tuning questions) or test (never used for tuning). "
+        "Picks the default --results/--traces and the split's gold labels.",
+    )
+    parser.add_argument("--results", type=Path, help="default: data/eval_results[_test].csv")
+    parser.add_argument("--traces", type=Path, help="default: the traces beside --results")
     parser.add_argument("--baseline", default="hybrid_reranked")
     parser.add_argument("--diff", default="agentic_v2", help="Config to diff against baseline.")
     parser.add_argument(
@@ -445,6 +452,13 @@ def main() -> None:
         "re-ingest: the extension grades papers on body passages that run could not retrieve).",
     )
     args = parser.parse_args()
+    files = split_files(args.split, DATA_DIR)
+    if args.results is None:
+        args.results = files.results
+    if args.traces is None:
+        args.traces = args.results.with_name(
+            args.results.stem.replace("results", "traces") + ".jsonl"
+        )
 
     by_config = load_rows([args.results, *repeat_paths(args.results)])
     traces = load_traces(args.traces)
@@ -458,7 +472,7 @@ def main() -> None:
     print("\n## Health checks\n")
     print("\n".join(f"- {p}" for p in problems) if problems else "- all clear")
 
-    grades = load_grades()
+    grades = load_grades(files)
     if traces:
         lenient = gold_sets(traces, grades, min_grade=0)  # every curated label
         n_lenient = sum(len(v) for v in lenient.values())
@@ -479,7 +493,7 @@ def main() -> None:
             strict = {}
             print("\n(no graded gold yet: run scripts/grade_gold.py for the strict table)")
 
-        extension, original_pool = ({}, {}) if args.no_extension else load_extension()
+        extension, original_pool = ({}, {}) if args.no_extension else load_extension(files)
         if extension:
             print("\n## What is in each config's context (main run)\n")
             print(context_table(traces, extension, original_pool))

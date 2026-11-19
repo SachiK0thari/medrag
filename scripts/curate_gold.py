@@ -33,6 +33,7 @@ Rationale for a pooled BM25 + dense candidate set (TREC-style pooling):
 Usage:
     python scripts/curate_gold.py            # resume: only uncurated/failed questions
     python scripts/curate_gold.py --force    # re-curate every question from scratch
+    python scripts/curate_gold.py --split test   # the test split -> gold_pmids_test.py
 """
 
 from __future__ import annotations
@@ -42,13 +43,14 @@ import json
 import random
 import textwrap
 import time
+from pathlib import Path
 
 from openai import APIStatusError
 
 from medrag.agent import llm
 from medrag.agent.graph import _extract_json
 from medrag.config import PROJECT_ROOT, get_settings
-from medrag.eval.questions import QUESTIONS
+from medrag.eval.splits import SPLITS, SplitFiles, load_generated, questions_for, split_files
 from medrag.models import Paper, RetrievedChunk
 from medrag.retrieval.bm25 import BM25Retriever
 from medrag.retrieval.dense import DenseRetriever
@@ -72,9 +74,6 @@ PER_RETRIEVER_POOL_SIZE = 15  # unique papers taken from EACH of BM25 and dense
 ABSTRACT_MAX_CHARS = 500
 REQUEST_SLEEP_SEC = 2.0
 RATE_LIMIT_BACKOFF_SEC = 60.0
-
-OUTPUT_PATH = PROJECT_ROOT / "src" / "medrag" / "eval" / "gold_pmids.py"
-AUDIT_PATH = get_settings().data_dir / "gold_curation_audit.json"
 
 
 CURATION_SYSTEM = """You are a medical literature curator building a retrieval
@@ -246,7 +245,9 @@ def _dq_list(items: list[str]) -> str:
     return "[" + ", ".join(_dq(i) for i in items) + "]"
 
 
-def write_gold_module(gold: dict[str, list[str]], reasoning: dict[str, str]) -> None:
+def write_gold_module(
+    gold: dict[str, list[str]], reasoning: dict[str, str], out_path: Path
+) -> None:
     lines: list[str] = [
         '"""LLM-curated gold PMIDs for the eval question set.',
         "",
@@ -274,19 +275,17 @@ def write_gold_module(gold: dict[str, list[str]], reasoning: dict[str, str]) -> 
         lines.append(f"    {_dq(qid)}: {_dq(note)},")
     lines.append("}")
     lines.append("")
-    OUTPUT_PATH.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines))
 
 
-def _load_existing_gold() -> tuple[dict[str, list[str]], dict[str, str]]:
-    """Resume: pull any gold already written to gold_pmids.py so a re-run
-    only re-curates questions that failed last time."""
-    try:
-        from medrag.eval import gold_pmids as existing  # type: ignore[attr-defined]
-    except ImportError:
+def _load_existing_gold(files: SplitFiles) -> tuple[dict[str, list[str]], dict[str, str]]:
+    """Resume: pull any gold already written to the split's gold module so a
+    re-run only re-curates questions that failed last time."""
+    loaded = load_generated(files, "gold_pmids", "GOLD_PMIDS", "NOTES")
+    if loaded is None:
         return {}, {}
-    gold = dict(getattr(existing, "GOLD_PMIDS", {}))
-    notes = dict(getattr(existing, "NOTES", {}))
-    return gold, notes
+    gold, notes = loaded
+    return dict(gold), dict(notes)
 
 
 def main() -> None:
@@ -301,7 +300,10 @@ def main() -> None:
         action="store_true",
         help="Re-curate every question, ignoring gold already in gold_pmids.py",
     )
+    parser.add_argument("--split", choices=SPLITS, default="dev", help="Question set to curate.")
     args = parser.parse_args()
+    files = split_files(args.split, get_settings().data_dir)
+    audit_path, out_path = files.curation_audit, files.gold_pmids_module
 
     if args.model:
         get_settings().llm_model = args.model
@@ -316,15 +318,15 @@ def main() -> None:
         gold, reasoning = {}, {}
         print("--force: re-curating every question")
     else:
-        gold, reasoning = _load_existing_gold()
+        gold, reasoning = _load_existing_gold(files)
         if gold:
             print(f"resuming: {sum(1 for v in gold.values() if v)} questions already curated")
     # Resume keeps the audit entries of questions that are not re-curated.
     audit: dict[str, dict[str, object]] = {}
-    if not args.force and AUDIT_PATH.exists():
-        audit = json.loads(AUDIT_PATH.read_text())
+    if not args.force and audit_path.exists():
+        audit = json.loads(audit_path.read_text())
 
-    for q in QUESTIONS:
+    for q in questions_for(args.split):
         prior_note = reasoning.get(q.qid, "")
         already_curated = q.qid in gold and not prior_note.startswith("curation failed")
         if already_curated:
@@ -347,17 +349,17 @@ def main() -> None:
                 "reasoning": note,
                 "judge_mode": mode,
             }
-            AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
-            AUDIT_PATH.write_text(json.dumps(audit, indent=2))
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            audit_path.write_text(json.dumps(audit, indent=2))
             sources = [provenance[p] for p in picks]
             print(f"    → {picks}  from {sources}  [{mode}]  ({note[:70]})")
 
         # Checkpoint after every question so a mid-run crash doesn't lose work.
-        write_gold_module(gold, reasoning)
+        write_gold_module(gold, reasoning, out_path)
         time.sleep(REQUEST_SLEEP_SEC)
 
     n_with_gold = sum(1 for v in gold.values() if v)
-    print(f"\nWrote {OUTPUT_PATH.relative_to(PROJECT_ROOT)}")
+    print(f"\nWrote {out_path.relative_to(PROJECT_ROOT)}")
     print(f"  {n_with_gold}/{len(gold)} questions have at least one gold PMID")
 
 

@@ -39,6 +39,7 @@ Usage:
     python scripts/extend_gold.py --traces data/eval_traces.jsonl data/eval_traces_rep2.jsonl
     python scripts/extend_gold.py --traces data/eval_traces.jsonl --force
     python scripts/extend_gold.py --no-grade    # rewrite the module from the audit file
+    python scripts/extend_gold.py --split test --traces data/eval_traces_test.jsonl ...
 """
 
 from __future__ import annotations
@@ -51,21 +52,17 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from curate_gold import AUDIT_PATH as CURATION_AUDIT_PATH
 from curate_gold import REQUEST_SLEEP_SEC, _call_with_backoff, _dq, build_pool
 
 from medrag.agent.graph import _extract_json
 from medrag.config import PROJECT_ROOT, get_settings
-from medrag.eval.gold_grades import GOLD_GRADES
-from medrag.eval.questions import QUESTIONS
+from medrag.eval.questions import EvalQuestion
+from medrag.eval.splits import SPLITS, SplitFiles, load_generated, questions_for, split_files
 from medrag.models import Paper
 from medrag.retrieval.bm25 import BM25Retriever
 from medrag.retrieval.dense import DenseRetriever
 from medrag.store import Store
 
-OUTPUT_PATH = PROJECT_ROOT / "src" / "medrag" / "eval" / "gold_extension.py"
-AUDIT_PATH = get_settings().data_dir / "gold_extension_audit.json"
-HUMAN_PATH = get_settings().data_dir / "gold_extension_spotcheck_verdicts.json"
 _VERDICT_TO_GRADE = {"OK": 2, "WEAK": 1, "WRONG": 0}
 
 TOP_K = 10  # the cut-off the eval scores at
@@ -155,11 +152,11 @@ def grade_batch(
     return out
 
 
-def load_human_check() -> dict[str, dict[str, int]]:
+def load_human_check(path: Path) -> dict[str, dict[str, int]]:
     """The hand-check of a sample of the papers graded direct, on the judge's scale."""
-    if not HUMAN_PATH.exists():
+    if not path.exists():
         return {}
-    verdicts = json.loads(HUMAN_PATH.read_text())["verdicts"]
+    verdicts = json.loads(path.read_text())["verdicts"]
     return {
         qid: {pmid: _VERDICT_TO_GRADE[v["verdict"]] for pmid, v in papers.items()}
         for qid, papers in verdicts.items()
@@ -170,6 +167,7 @@ def write_module(
     grades: dict[str, dict[str, int]],
     judged_before: dict[str, set[str]],
     human: dict[str, dict[str, int]],
+    out_path: Path,
 ) -> None:
     lines = [
         '"""Grades for papers judged after the full-text re-ingest (2 direct, 1 related,',
@@ -205,11 +203,9 @@ def write_module(
         inner = ", ".join(f"{_dq(p)}: {g}" for p, g in sorted(human[qid].items()))
         lines.append(f"    {_dq(qid)}: {{{inner}}},")
     lines += ["}", ""]
-    OUTPUT_PATH.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines))
     # The pool lists are long lines; CI checks formatting over the whole package.
-    subprocess.run(
-        [sys.executable, "-m", "ruff", "format", "--quiet", str(OUTPUT_PATH)], check=True
-    )
+    subprocess.run([sys.executable, "-m", "ruff", "format", "--quiet", str(out_path)], check=True)
 
 
 def main() -> None:
@@ -227,49 +223,59 @@ def main() -> None:
         action="store_true",
         help="Grade nothing: rewrite the module from the audit file (no API calls).",
     )
+    parser.add_argument("--split", choices=SPLITS, default="dev", help="Question set to extend.")
     args = parser.parse_args()
+    files = split_files(args.split, get_settings().data_dir)
+    questions = questions_for(args.split)
 
     judged_before = {
         qid: set(entry["pool"])
-        for qid, entry in json.loads(CURATION_AUDIT_PATH.read_text()).items()
+        for qid, entry in json.loads(files.curation_audit.read_text()).items()
     }
     audit: dict[str, dict[str, dict[str, object]]] = {}
-    if not args.force and AUDIT_PATH.exists():
-        audit = json.loads(AUDIT_PATH.read_text())["grades"]
+    if not args.force and files.extension_audit.exists():
+        audit = json.loads(files.extension_audit.read_text())["grades"]
 
     if not args.no_grade:
-        grade_candidates(audit, args.traces)
+        grade_candidates(audit, args.traces, questions, files)
 
     grades = {
         qid: {pmid: int(g["grade"]) for pmid, g in papers.items()}  # type: ignore[call-overload]
         for qid, papers in audit.items()
         if papers
     }
-    human = load_human_check()
-    write_module(grades, judged_before, human)
+    human = load_human_check(files.extension_human)
+    write_module(grades, judged_before, human, files.gold_extension_module)
     counts = Counter(g for papers in grades.values() for g in papers.values())
-    print(f"\nWrote {OUTPUT_PATH.relative_to(PROJECT_ROOT)}")
+    print(f"\nWrote {files.gold_extension_module.relative_to(PROJECT_ROOT)}")
     print(f"  graded {sum(counts.values())} papers: {dict(sorted(counts.items()))}")
     print(
         f"  questions that gain a grade-2 paper: "
-        f"{sum(1 for papers in grades.values() if 2 in papers.values())}/{len(QUESTIONS)}"
+        f"{sum(1 for papers in grades.values() if 2 in papers.values())}/{len(questions)}"
     )
     if human:
         checked = Counter(g for papers in human.values() for g in papers.values())
         print(f"  hand-checked {sum(checked.values())}: {dict(sorted(checked.items()))}")
 
 
-def grade_candidates(audit: dict[str, dict[str, dict[str, object]]], traces: list[Path]) -> None:
+def grade_candidates(
+    audit: dict[str, dict[str, dict[str, object]]],
+    traces: list[Path],
+    questions: list[EvalQuestion],
+    files: SplitFiles,
+) -> None:
     """Grade every candidate not yet in `audit`, saving the audit file after each batch."""
+    loaded = load_generated(files, "gold_grades", "GOLD_GRADES")
+    all_gold_grades: dict[str, dict[str, int]] = loaded[0] if loaded else {}
     store = Store()
     bm25 = BM25Retriever.from_store(store)
     dense = DenseRetriever(store=store)
     from_traces = top10_by_question(traces)
 
-    for q in QUESTIONS:
+    for q in questions:
         pool, _ = build_pool(q.question, bm25, dense, seed=q.qid)
         passages = body_passages(q.question, bm25)
-        gold_grades = GOLD_GRADES.get(q.qid, {})
+        gold_grades = all_gold_grades.get(q.qid, {})
         # Gold papers the judge has nothing new to read for: already direct on
         # the abstract, or no body indexed.
         settled = {
@@ -290,7 +296,7 @@ def grade_candidates(audit: dict[str, dict[str, dict[str, object]]], traces: lis
             except Exception as e:  # leave ungraded; a later run retries it
                 print(f"    ERROR: {e}")
                 continue
-            AUDIT_PATH.write_text(json.dumps({"grades": audit}, indent=2))
+            files.extension_audit.write_text(json.dumps({"grades": audit}, indent=2))
             time.sleep(REQUEST_SLEEP_SEC)
         print(f"    → {dict(sorted(Counter(g['grade'] for g in done.values()).items()))}")
 

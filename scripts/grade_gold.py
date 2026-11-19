@@ -26,26 +26,27 @@ in the audit file), and they override the judge wherever both exist.
 Usage:
     python scripts/grade_gold.py            # grade ungraded questions
     python scripts/grade_gold.py --force    # re-grade everything
+    python scripts/grade_gold.py --split test   # the test split -> gold_grades_test.py
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 import time
 from collections import Counter
+from pathlib import Path
 
 from curate_gold import REQUEST_SLEEP_SEC, _call_with_backoff, _dq
 
 from medrag.agent.graph import _extract_json
 from medrag.config import PROJECT_ROOT, get_settings
 from medrag.eval.metrics import cohen_kappa
-from medrag.eval.questions import QUESTIONS
+from medrag.eval.splits import SPLITS, questions_for, split_files
 from medrag.store import Store
 
-OUTPUT_PATH = PROJECT_ROOT / "src" / "medrag" / "eval" / "gold_grades.py"
-AUDIT_PATH = get_settings().data_dir / "gold_grades_audit.json"
-HUMAN_PATH = get_settings().data_dir / "gold_spotcheck_verdicts.json"
 _VERDICT_TO_GRADE = {"OK": 2, "WEAK": 1, "WRONG": 0}
 
 GRADE_SYSTEM = """You are grading relevance labels for a retrieval benchmark over
@@ -102,10 +103,10 @@ def grade_question(question: str, pmids: list[str], store: Store) -> dict[str, d
     return out
 
 
-def load_human_grades() -> dict[str, dict[str, int]]:
-    if not HUMAN_PATH.exists():
+def load_human_grades(path: Path) -> dict[str, dict[str, int]]:
+    if not path.exists():
         return {}
-    verdicts = json.loads(HUMAN_PATH.read_text())["verdicts"]
+    verdicts = json.loads(path.read_text())["verdicts"]
     return {
         qid: {pmid: _VERDICT_TO_GRADE[v["verdict"]] for pmid, v in papers.items()}
         for qid, papers in verdicts.items()
@@ -145,7 +146,9 @@ def _grades_literal(name: str, grades: dict[str, dict[str, int]]) -> list[str]:
     return lines
 
 
-def write_module(llm: dict[str, dict[str, int]], human: dict[str, dict[str, int]]) -> None:
+def write_module(
+    llm: dict[str, dict[str, int]], human: dict[str, dict[str, int]], out_path: Path
+) -> None:
     lines = [
         '"""Graded relevance for the gold labels (2 direct, 1 related, 0 irrelevant).',
         "",
@@ -168,21 +171,26 @@ def write_module(llm: dict[str, dict[str, int]], human: dict[str, dict[str, int]
         "}",
         "",
     ]
-    OUTPUT_PATH.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines))
+    # Long grade dicts need wrapping; CI checks formatting over the whole repo.
+    subprocess.run([sys.executable, "-m", "ruff", "format", "--quiet", str(out_path)], check=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--force", action="store_true", help="Re-grade every question.")
+    parser.add_argument("--split", choices=SPLITS, default="dev", help="Question set to grade.")
     args = parser.parse_args()
+    files = split_files(args.split, get_settings().data_dir)
+    audit_path, out_path = files.grades_audit, files.gold_grades_module
 
     store = Store()
     audit: dict[str, dict[str, dict[str, object]]] = {}
-    if not args.force and AUDIT_PATH.exists():
-        audit = json.loads(AUDIT_PATH.read_text()).get("grades", {})
-    human = load_human_grades()
+    if not args.force and audit_path.exists():
+        audit = json.loads(audit_path.read_text()).get("grades", {})
+    human = load_human_grades(files.grades_human)
 
-    for q in QUESTIONS:
+    for q in questions_for(args.split):
         if not q.gold_pmids:
             continue
         if set(audit.get(q.qid, {})) == set(q.gold_pmids):
@@ -197,18 +205,18 @@ def main() -> None:
         print(
             "    → " + ", ".join(f"{p}={g['grade']}" for p, g in audit[q.qid].items()), flush=True
         )
-        AUDIT_PATH.write_text(json.dumps({"grades": audit}, indent=2))
+        audit_path.write_text(json.dumps({"grades": audit}, indent=2))
         time.sleep(REQUEST_SLEEP_SEC)
 
     llm = {q: {p: int(g["grade"]) for p, g in papers.items()} for q, papers in audit.items()}  # type: ignore[call-overload]
     stats = agreement(llm, human)
-    AUDIT_PATH.write_text(json.dumps({"agreement_with_human": stats, "grades": audit}, indent=2))
-    write_module(llm, human)
+    audit_path.write_text(json.dumps({"agreement_with_human": stats, "grades": audit}, indent=2))
+    write_module(llm, human, out_path)
 
     final = {q: {**g, **human.get(q, {})} for q, g in llm.items()}
     counts = Counter(g for papers in final.values() for g in papers.values())
     strict_questions = sum(1 for papers in final.values() if 2 in papers.values())
-    print(f"\nWrote {OUTPUT_PATH.relative_to(PROJECT_ROOT)}")
+    print(f"\nWrote {out_path.relative_to(PROJECT_ROOT)}")
     print(
         f"  graded {sum(counts.values())} labels on {len(final)} questions: {dict(sorted(counts.items()))}"
     )
