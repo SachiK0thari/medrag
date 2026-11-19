@@ -35,7 +35,9 @@ class FakeCompletions:
         choice = SimpleNamespace(
             message=SimpleNamespace(content=self._content), finish_reason=self._finish
         )
-        return SimpleNamespace(choices=[choice], usage=usage, model="fake/model")
+        return SimpleNamespace(
+            choices=[choice], usage=usage, model="fake/model", provider="FakeProvider"
+        )
 
 
 @pytest.fixture
@@ -101,6 +103,72 @@ def test_truncation_is_flagged_and_logged(fake_client, caplog: pytest.LogCapture
     assert r.text == ""
     assert r.reasoning_tokens == 384
     assert "truncated at max_tokens=384" in caplog.text
+
+
+class SequenceCompletions(FakeCompletions):
+    """Returns the given (content, finish, reasoning_tokens) replies in order."""
+
+    def __init__(self, replies: list[tuple[str, str, int]]) -> None:
+        super().__init__(content="", finish="stop", reasoning_tokens=0, cost=0.0)
+        self.replies = replies
+        self.calls = 0
+
+    def create(self, **kwargs: object) -> SimpleNamespace:
+        self._content, self._finish, self._reasoning = self.replies[self.calls]
+        self.calls += 1
+        return super().create(**kwargs)
+
+
+@pytest.fixture
+def sequence(monkeypatch: pytest.MonkeyPatch):
+    def _install(*replies: tuple[str, str, int]) -> SequenceCompletions:
+        completions = SequenceCompletions(list(replies))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        monkeypatch.setattr(llm, "_get_client", lambda: client)
+        return completions
+
+    return _install
+
+
+def test_provider_is_recorded_and_logged_on_truncation(fake_client, caplog):
+    fake_client(content="partial", finish="length", reasoning_tokens=0)
+    with caplog.at_level(logging.WARNING, logger="medrag.agent.llm"):
+        r = llm.complete("sys", "user")
+    assert r.provider == "FakeProvider"
+    assert "provider=FakeProvider" in caplog.text
+
+
+def test_empty_truncated_reply_with_reasoning_off_is_retried_once(sequence, caplog):
+    c = sequence(("", "length", 1024), ("answer", "stop", 0))
+    with llm.track_usage() as usage, caplog.at_level(logging.WARNING, logger="medrag.agent.llm"):
+        r = llm.complete("sys", "user")
+    assert r.text == "answer"
+    assert c.calls == 2
+    # The failed attempt was billed, so it stays in the usage bucket.
+    assert [u.truncated for u in usage] == [True, False]
+    assert "retrying once" in caplog.text
+
+
+def test_empty_reply_is_retried_only_once(sequence):
+    c = sequence(("", "length", 1024), ("", "length", 1024), ("never", "stop", 0))
+    r = llm.complete("sys", "user")
+    assert r.text == ""
+    assert r.truncated is True
+    assert c.calls == 2
+
+
+@pytest.mark.parametrize(
+    ("first", "kwargs"),
+    [
+        (("partial text", "length", 0), {}),  # visible text: a real cap hit, keep it
+        (("", "stop", 0), {}),  # not truncated
+        (("", "length", 1024), {"reasoning": True}),  # reasoning on: cap too small
+    ],
+)
+def test_no_retry_outside_the_empty_reasoning_off_case(sequence, first, kwargs):
+    c = sequence(first, ("second", "stop", 0))
+    llm.complete("sys", "user", **kwargs)
+    assert c.calls == 1
 
 
 def test_missing_cost_and_details_are_tolerated(fake_client):

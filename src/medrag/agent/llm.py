@@ -56,6 +56,9 @@ class LLMResponse:
     # Hidden reasoning tokens billed as output. They count against max_tokens,
     # so a reasoning model with a small cap can return empty visible text.
     reasoning_tokens: int = 0
+    # The upstream provider OpenRouter routed the call to (e.g. "DeepInfra").
+    # Logged on truncation so a misbehaving provider can be identified.
+    provider: str | None = None
 
     @property
     def truncated(self) -> bool:
@@ -153,7 +156,8 @@ def complete(
     a timed-out request is retried. Without an explicit cap a stalled
     connection waits out the SDK's 10-minute default, which once froze a batch
     job on a single request. Attempts come from ``LLM_MAX_ATTEMPTS``, or from
-    `online_limits` inside that block.
+    `online_limits` inside that block. With reasoning off, an empty reply cut
+    off at the token cap is retried once (see below).
     """
     from openai import APIConnectionError, APITimeoutError, RateLimitError
 
@@ -214,29 +218,61 @@ def complete(
             timeout=timeout_s,
         )
 
-    resp = _call()
+    response = _to_response(_call(), settings.llm_model)
+    _warn_if_truncated(response, effective_max_tokens)
+    # DeepSeek V4.1 Flash occasionally reasons despite ``reasoning: {enabled:
+    # false}`` (some OpenRouter providers seem to ignore the flag) and spends
+    # the whole token cap thinking, returning empty text. It is intermittent,
+    # so one more call almost always succeeds. Only retry when reasoning was
+    # meant to be off: with it on, an empty reply means the cap is too small
+    # and a second call would fail the same way.
+    if not use_reasoning and response.truncated and not response.text.strip():
+        _log.warning(
+            "LLM returned empty text with reasoning off (provider=%s); retrying once",
+            response.provider,
+        )
+        _record(response)
+        response = _to_response(_call(), settings.llm_model)
+        _warn_if_truncated(response, effective_max_tokens)
+    _record(response)
+    return response
+
+
+def _to_response(resp: ChatCompletion, default_model: str) -> LLMResponse:
     usage = resp.usage
     choice = resp.choices[0]
-    # OpenRouter adds a non-standard ``cost`` field when usage accounting is on.
+    # OpenRouter adds non-standard ``cost`` (usage) and ``provider`` (top
+    # level) fields; the SDK keeps unknown fields as attributes.
     raw_cost = getattr(usage, "cost", None) if usage else None
     details = getattr(usage, "completion_tokens_details", None) if usage else None
     raw_reasoning = getattr(details, "reasoning_tokens", None) if details else None
-    response = LLMResponse(
+    raw_provider = getattr(resp, "provider", None)
+    return LLMResponse(
         text=choice.message.content or "",
         input_tokens=usage.prompt_tokens if usage else 0,
         output_tokens=usage.completion_tokens if usage else 0,
-        model=resp.model or settings.llm_model,
+        model=resp.model or default_model,
         cost_usd=float(raw_cost) if isinstance(raw_cost, int | float) else None,
         finish_reason=choice.finish_reason,
         reasoning_tokens=raw_reasoning if isinstance(raw_reasoning, int) else 0,
+        provider=raw_provider if isinstance(raw_provider, str) else None,
     )
+
+
+def _warn_if_truncated(response: LLMResponse, max_tokens: int) -> None:
     if response.truncated:
         _log.warning(
-            "LLM output truncated at max_tokens=%d (reasoning_tokens=%d, visible_chars=%d)",
-            effective_max_tokens,
+            "LLM output truncated at max_tokens=%d "
+            "(reasoning_tokens=%d, visible_chars=%d, provider=%s)",
+            max_tokens,
             response.reasoning_tokens,
             len(response.text),
+            response.provider,
         )
+
+
+def _record(response: LLMResponse) -> None:
+    """Add a response to every open `track_usage` bucket (a retried call's
+    tokens are still billed, so the failed attempt is recorded too)."""
     for bucket in _usage_stack:
         bucket.append(response)
-    return response
