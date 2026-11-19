@@ -1,19 +1,20 @@
 .PHONY: install dev lint format type test test-all ingest reingest eval plot api ui clean
 
+# Both install exactly what uv.lock pins into .venv (created if missing).
 install:
-	pip install -e .
+	uv sync --frozen
 
 dev:
-	pip install -e ".[dev,eval]"
-	pre-commit install
+	uv sync --frozen --extra dev --extra eval
+	uv run --no-sync pre-commit install
 
 lint:
-	ruff check src tests
-	ruff format --check src tests
+	ruff check .
+	ruff format --check .
 
 format:
-	ruff check --fix src tests
-	ruff format src tests
+	ruff check --fix .
+	ruff format .
 
 type:
 	mypy src

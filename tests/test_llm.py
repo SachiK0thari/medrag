@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from medrag.agent import llm
@@ -134,3 +135,78 @@ def test_request_timeout_defaults_to_setting_and_can_be_overridden(fake_client):
     assert c.kwargs["timeout"] == llm.get_settings().llm_timeout_s
     llm.complete("sys", "user", timeout_s=300.0)
     assert c.kwargs["timeout"] == 300.0
+
+
+class FlakyCompletions(FakeCompletions):
+    """Times out `failures` times, then answers."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__(content="ok", finish="stop", reasoning_tokens=0, cost=0.0)
+        self.failures = failures
+        self.timeouts: list[object] = []
+
+    def create(self, **kwargs: object) -> SimpleNamespace:
+        from openai import APITimeoutError
+
+        self.timeouts.append(kwargs["timeout"])
+        if len(self.timeouts) <= self.failures:
+            raise APITimeoutError(request=httpx.Request("POST", "https://example.invalid"))
+        return super().create(**kwargs)
+
+
+@pytest.fixture
+def flaky(monkeypatch: pytest.MonkeyPatch):
+    from tenacity import wait_none
+
+    monkeypatch.setattr(llm, "_retry_wait", wait_none())
+
+    def _install(failures: int) -> FlakyCompletions:
+        completions = FlakyCompletions(failures)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        monkeypatch.setattr(llm, "_get_client", lambda: client)
+        return completions
+
+    return _install
+
+
+def test_default_limits_are_patient(flaky):
+    c = flaky(failures=5)
+    assert llm.complete("sys", "user").text == "ok"
+    settings = llm.get_settings()
+    assert len(c.timeouts) == settings.llm_max_attempts == 6
+    assert set(c.timeouts) == {settings.llm_timeout_s}
+
+
+def test_online_limits_cut_timeout_and_attempts(flaky):
+    from openai import APITimeoutError
+
+    c = flaky(failures=5)
+    settings = llm.get_settings()
+    with llm.online_limits(), pytest.raises(APITimeoutError):
+        llm.complete("sys", "user")
+    assert len(c.timeouts) == settings.llm_online_max_attempts == 2
+    assert set(c.timeouts) == {settings.llm_online_timeout_s}
+
+
+def test_online_limits_end_with_the_block(flaky):
+    c = flaky(failures=0)
+    with llm.online_limits():
+        llm.complete("sys", "user")
+    llm.complete("sys", "user")
+    assert c.timeouts == [llm.get_settings().llm_online_timeout_s, llm.get_settings().llm_timeout_s]
+
+
+def test_explicit_timeout_wins_over_online_limits(flaky):
+    c = flaky(failures=0)
+    with llm.online_limits():
+        llm.complete("sys", "user", timeout_s=300.0)
+    assert c.timeouts == [300.0]
+
+
+def test_retries_are_logged_not_printed(flaky, caplog, capsys):
+    flaky(failures=1)
+    with caplog.at_level(logging.WARNING, logger="medrag.agent.llm"):
+        llm.complete("sys", "user")
+    assert "APITimeoutError, retrying" in caplog.text
+    assert "attempt 1 of 6" in caplog.text
+    assert capsys.readouterr().out == ""

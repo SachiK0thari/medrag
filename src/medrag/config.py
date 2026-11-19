@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
     llm_timeout_s: float = 120.0  # per-request cap; the SDK default is 10 minutes
+    llm_max_attempts: int = 6  # tries per call on rate limits, timeouts, dropped connections
+    # Inside llm.online_limits() (UI + API): one answer makes 2-4 calls of ~1-2 s
+    # each, so 20 s x 2 attempts caps a stalled call at about 45 s.
+    llm_online_timeout_s: float = 20.0
+    llm_online_max_attempts: int = 2
 
     # ---- Embeddings ------------------------------------------------------- #
     embedding_model: str = "BAAI/bge-small-en-v1.5"

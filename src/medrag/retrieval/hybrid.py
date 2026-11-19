@@ -46,7 +46,11 @@ def reciprocal_rank_fusion(
 
 
 class HybridRetriever:
-    """Runs BM25 and dense retrieval in parallel and fuses with RRF."""
+    """Runs BM25, then dense retrieval, and fuses the two lists with RRF.
+
+    Sequential on purpose: BM25 takes milliseconds in memory, so running the
+    two concurrently would save almost nothing.
+    """
 
     def __init__(self, bm25: BM25Retriever, dense: DenseRetriever) -> None:
         self._bm25 = bm25

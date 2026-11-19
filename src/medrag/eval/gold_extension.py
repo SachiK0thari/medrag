@@ -10,8 +10,8 @@ best-matching body passages. The gold labels in `gold_pmids.py` and the
 grades in `gold_grades.py` are unchanged.
 
 `HUMAN_CHECK` is a hand-check of a random sample of the papers graded 2
-(empty until one is done). It is kept for comparison: `EXTENSION_GRADES`
-holds the judge's grades whatever the hand-check says.
+(empty when no hand-check has been saved). It is kept for comparison:
+`EXTENSION_GRADES` holds the judge's grades whatever the hand-check says.
 """
 
 from __future__ import annotations

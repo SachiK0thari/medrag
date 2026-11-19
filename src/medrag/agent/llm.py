@@ -3,6 +3,14 @@
 Model-agnostic by design: swap LLM_MODEL to any OpenRouter model id, or
 replace this file with an Anthropic / OpenAI client and the rest of the
 codebase doesn't change.
+
+Two pieces of module state are process-global and unlocked: `_usage_stack`
+(the `track_usage` buckets) and `_last_call_time` (the optional throttle).
+Both assume one caller at a time, which holds for the eval and curation
+scripts that use them. Concurrent callers (Streamlit sessions, API requests)
+can make the throttle under-wait and would see each other's calls in an open
+`track_usage` bucket; neither is used on those paths. The per-call limits from
+`online_limits` live in a `ContextVar`, so they are safe across threads.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +29,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from tenacity.wait import wait_base
 
 from medrag.config import get_settings
 
@@ -53,6 +63,41 @@ class LLMResponse:
 
 
 _client: OpenAI | None = None
+
+# Backoff between retries; a module attribute so tests can make it instant.
+_retry_wait: wait_base = wait_exponential(multiplier=2, min=2, max=60)
+
+
+@dataclass(frozen=True)
+class CallLimits:
+    timeout_s: float
+    max_attempts: int
+
+
+_call_limits: ContextVar[CallLimits | None] = ContextVar("medrag_llm_call_limits", default=None)
+
+
+@contextmanager
+def online_limits() -> Iterator[None]:
+    """Use the short timeout and few retries meant for a person waiting on an answer.
+
+    The defaults (``LLM_TIMEOUT_S``, ``LLM_MAX_ATTEMPTS``) are patient because
+    the eval and curation scripts would rather wait than lose a row. The
+    public entry points wrap each answer in this block, so a stalled provider
+    fails in under a minute per call instead of retrying for many minutes.
+    """
+    settings = get_settings()
+    token = _call_limits.set(
+        CallLimits(
+            timeout_s=settings.llm_online_timeout_s,
+            max_attempts=settings.llm_online_max_attempts,
+        )
+    )
+    try:
+        yield
+    finally:
+        _call_limits.reset(token)
+
 
 # Active token-usage buckets. Each entry is a list appended to by every
 # `complete()` call while the bucket is in scope. The harness uses this to
@@ -104,14 +149,20 @@ def complete(
 
     `reasoning` overrides ``LLM_REASONING_ENABLED`` for this call (the gold
     curation judge turns it on; the latency-sensitive agent leaves it off).
-    `timeout_s` overrides ``LLM_TIMEOUT_S``; a timed-out request is retried.
-    Without an explicit cap a stalled connection waits out the SDK's
-    10-minute default, which once froze a batch job on a single request.
+    `timeout_s` overrides ``LLM_TIMEOUT_S`` (and the `online_limits` timeout);
+    a timed-out request is retried. Without an explicit cap a stalled
+    connection waits out the SDK's 10-minute default, which once froze a batch
+    job on a single request. Attempts come from ``LLM_MAX_ATTEMPTS``, or from
+    `online_limits` inside that block.
     """
     from openai import APIConnectionError, APITimeoutError, RateLimitError
 
     settings = get_settings()
     client = _get_client()
+    limits = _call_limits.get()
+    max_attempts = limits.max_attempts if limits else settings.llm_max_attempts
+    if timeout_s is None:
+        timeout_s = limits.timeout_s if limits else settings.llm_timeout_s
 
     # OpenRouter-specific knobs go in extra_body (the OpenAI SDK passes them
     # through verbatim). ``usage.include`` makes the response carry the real
@@ -131,12 +182,14 @@ def complete(
 
     @retry(
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APITimeoutError)),
-        stop=stop_after_attempt(6),
-        wait=wait_exponential(multiplier=2, min=2, max=60),
-        before_sleep=lambda rs: print(
-            f"  [llm-retry] {type(rs.outcome.exception()).__name__ if rs.outcome else 'error'}"
-            f" — waiting {rs.next_action.sleep if rs.next_action else 0:.0f}s"
-            f" (attempt {rs.attempt_number})..."
+        stop=stop_after_attempt(max_attempts),
+        wait=_retry_wait,
+        before_sleep=lambda rs: _log.warning(
+            "LLM call failed with %s, retrying in %.0fs (attempt %d of %d)",
+            type(rs.outcome.exception()).__name__ if rs.outcome else "error",
+            rs.next_action.sleep if rs.next_action else 0,
+            rs.attempt_number,
+            max_attempts,
         ),
         reraise=True,
     )
@@ -158,7 +211,7 @@ def complete(
             temperature=temperature if temperature is not None else settings.llm_temperature,
             max_tokens=effective_max_tokens,
             extra_body=extra_body,
-            timeout=timeout_s if timeout_s is not None else settings.llm_timeout_s,
+            timeout=timeout_s,
         )
 
     resp = _call()

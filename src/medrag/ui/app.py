@@ -10,6 +10,7 @@ import time
 
 import streamlit as st
 
+from medrag.agent import llm
 from medrag.agent.graph import MedRagAgent
 from medrag.config import MAX_QUESTION_CHARS, get_settings
 from medrag.ratelimit import client_from_forwarded, get_limiter
@@ -97,7 +98,8 @@ if st.button("Search", type="primary", disabled=not question):
     with st.spinner("Running agentic retrieval..."):
         t0 = time.perf_counter()
         try:
-            answer = load_agent().answer(question)
+            with llm.online_limits():
+                answer = load_agent().answer(question)
         except Exception:
             _log.exception("answer failed")
             get_limiter().release(client)

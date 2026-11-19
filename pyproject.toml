@@ -32,9 +32,6 @@ dependencies = [
     "openai>=1.50,<3",
     "langgraph>=0.2,<0.3",
 
-    # Storage
-    "sqlmodel>=0.0.21,<0.1",
-
     # API + UI
     "fastapi>=0.115,<0.116",
     "uvicorn[standard]>=0.30,<0.31",
@@ -49,7 +46,6 @@ dev = [
     "ruff>=0.6,<0.7",
     "mypy>=1.11,<2",
     "pre-commit>=3.8,<4",
-    "types-requests",
 ]
 eval = [
     "ragas>=0.2,<0.3",

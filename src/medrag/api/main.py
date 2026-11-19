@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from medrag import __version__
+from medrag.agent import llm
 from medrag.agent.graph import MedRagAgent
 from medrag.config import MAX_QUESTION_CHARS
 from medrag.models import Answer
@@ -59,7 +60,8 @@ def ask(req: AskRequest, request: Request) -> Answer:
             headers={"Retry-After": str(math.ceil(decision.retry_after_s))},
         )
     try:
-        return get_agent().answer(req.question)
+        with llm.online_limits():
+            return get_agent().answer(req.question)
     except Exception as e:
         # Log the cause; never send upstream error text (LLM, Pinecone) to clients.
         _log.exception("answer failed")

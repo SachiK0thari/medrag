@@ -230,8 +230,8 @@ swapping to Claude, GPT, Llama, etc. is a one-line `LLM_MODEL` change.
 # 1. Install
 git clone https://github.com/SachiK0thari/medrag.git
 cd medrag
-python -m venv .venv && source .venv/bin/activate
-make dev   # installs with dev + eval extras, sets up pre-commit
+make dev   # needs uv; installs the locked dev + eval deps into .venv, sets up pre-commit
+source .venv/bin/activate
 
 # 2. Configure
 cp .env.example .env
@@ -309,8 +309,8 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 162 unit tests that run in under two seconds with no network and
-  no model downloads. Line coverage is 79% overall and 95% on the agent graph;
+- **Tests** — 182 unit tests that run in under two seconds with no network and
+  no model downloads. Line coverage is 83% overall and 95% on the agent graph;
   the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
 - **Reproducible ingestion** — papers are persisted to SQLite, and
