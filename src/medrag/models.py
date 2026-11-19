@@ -139,7 +139,6 @@ class Answer(BaseModel):
     text: str
     citations: list[Citation]
     sub_queries: list[SubQuery] = Field(default_factory=list)
-    confidence: float = Field(..., ge=0.0, le=1.0)
     n_retrieval_calls: int = Field(..., ge=1)
     total_chunks_considered: int = Field(..., ge=0)
 

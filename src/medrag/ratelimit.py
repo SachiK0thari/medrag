@@ -107,6 +107,17 @@ class RateLimiter:
                 hits.append(now)
             return Decision(True)
 
+    def release(self, client: str) -> None:
+        """Give back `client`'s most recent request, e.g. after the answer failed.
+
+        Only the per-client window is refunded: a failed question may already
+        have spent LLM tokens, so it stays counted against the global budget.
+        """
+        with self._lock:
+            hits = self._clients.get(client)
+            if hits:
+                hits.pop()
+
     def _sweep(self, now: float) -> None:
         for key in list(self._clients):
             hits = self._clients[key]

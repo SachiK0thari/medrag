@@ -1,4 +1,4 @@
-"""Held-out evaluation question set.
+"""Evaluation question set.
 
 33 curated questions on GLP-1 cardiovascular outcomes. Each question is
 defined here (text + category) and gold PMIDs are merged in at import time

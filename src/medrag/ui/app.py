@@ -42,7 +42,7 @@ with st.sidebar:
     st.markdown(
         "**Stack:** PubMed/PMC · bge embeddings · Pinecone · BM25 + RRF · "
         "bge-reranker · LangGraph · DeepSeek V4.1 Flash (OpenRouter)\n\n"
-        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on 33 held-out questions.\n\n"
+        "**Eval:** Recall@10, nDCG@10, RAGAS faithfulness on a 33-question evaluation set.\n\n"
         "[Source on GitHub](https://github.com/SachiK0thari/medrag)"
     )
     _settings = get_settings()
@@ -77,8 +77,11 @@ question = st.text_input(
 )
 
 
-def _check_rate_limit() -> None:
-    """Count this question against the limits; show why and stop if refused."""
+def _check_rate_limit() -> str:
+    """Count this question against the limits; show why and stop if refused.
+
+    Returns the client key, so a failed answer can give its slot back.
+    """
     # HF Spaces (and any reverse proxy) puts the visitor's address in
     # X-Forwarded-For; without the header (local runs) everyone shares one key.
     client = client_from_forwarded(st.context.headers.get("X-Forwarded-For"))
@@ -86,14 +89,24 @@ def _check_rate_limit() -> None:
     if not decision.allowed:
         st.warning(decision.message)
         st.stop()
+    return client
 
 
 if st.button("Search", type="primary", disabled=not question):
-    _check_rate_limit()
+    client = _check_rate_limit()
     with st.spinner("Running agentic retrieval..."):
         t0 = time.perf_counter()
-        agent = load_agent()
-        answer = agent.answer(question)
+        try:
+            answer = load_agent().answer(question)
+        except Exception:
+            _log.exception("answer failed")
+            get_limiter().release(client)
+            st.error(
+                "Something went wrong while answering, most likely a temporary problem "
+                "with the language model or the search index. Please try again; "
+                "this question did not count against your limit."
+            )
+            st.stop()
         latency_s = time.perf_counter() - t0
 
     col_main, col_meta = st.columns([3, 1])
@@ -107,6 +120,6 @@ if st.button("Search", type="primary", disabled=not question):
                 st.markdown(f"> {cit.snippet}")
     with col_meta:
         st.metric("Latency", f"{latency_s:.2f}s")
-        st.metric("Confidence", f"{answer.confidence:.0%}")
+        st.metric("Sources cited", len(answer.citations))
         st.metric("Sub-queries", len(answer.sub_queries))
         st.metric("Chunks considered", answer.total_chunks_considered)

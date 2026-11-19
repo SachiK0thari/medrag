@@ -198,15 +198,6 @@ def _extract_citations(answer_text: str, sources: list[RetrievedChunk]) -> list[
     return citations
 
 
-def _confidence(citations: list[Citation], sources: list[RetrievedChunk]) -> float:
-    if not sources:
-        return 0.0
-    if not citations:
-        return 0.2
-    base = 0.5 + 0.1 * len(citations)
-    return max(0.0, min(1.0, base))
-
-
 def _spent(timings: dict[str, float], stage: str, started: float) -> None:
     """Add the time since `started` (a `perf_counter` reading) to `stage`."""
     timings[stage] = timings.get(stage, 0.0) + time.perf_counter() - started
@@ -266,7 +257,6 @@ def generate_answer(
         text=text,
         citations=citations,
         sub_queries=list(sub_queries) if sub_queries else [],
-        confidence=_confidence(citations, top),
         n_retrieval_calls=max(n_retrieval_calls, 1),
         total_chunks_considered=len(retrieved),
     )

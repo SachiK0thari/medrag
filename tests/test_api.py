@@ -24,7 +24,6 @@ class StubAgent:
             question=question,
             text="Stub [1].",
             citations=[],
-            confidence=0.5,
             n_retrieval_calls=1,
             total_chunks_considered=0,
         )
@@ -94,12 +93,24 @@ def test_health_is_not_rate_limited(client):
         assert c.get("/health").status_code == 200
 
 
-def test_ask_maps_agent_failure_to_500(monkeypatch: pytest.MonkeyPatch):
+def test_ask_maps_agent_failure_to_a_generic_500(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(api, "get_agent", lambda: StubAgent(fail=True))
     c = TestClient(api.app, raise_server_exceptions=False)
     r = c.post("/ask", json={"question": "anything at all"})
     assert r.status_code == 500
-    assert "pinecone down" in r.json()["detail"]
+    # The upstream error text stays in the server log, not the response.
+    assert "pinecone down" not in r.json()["detail"]
+    assert "try again" in r.json()["detail"]
+
+
+def test_failed_questions_do_not_use_up_the_client_limit(monkeypatch: pytest.MonkeyPatch):
+    stub = StubAgent(fail=True)
+    monkeypatch.setattr(api, "get_agent", lambda: stub)
+    c = TestClient(api.app, raise_server_exceptions=False)
+    for _ in range(3):  # the fixture's limit is 2 per client
+        assert c.post("/ask", json={"question": "anything at all"}).status_code == 500
+    stub.fail = False
+    assert c.post("/ask", json={"question": "anything at all"}).status_code == 200
 
 
 def test_get_agent_is_cached(monkeypatch: pytest.MonkeyPatch):

@@ -151,7 +151,7 @@ files into every table quoted in the docs.
 | `medrag.agent.prompts` | Versioned prompt templates |
 | `medrag.agent.graph` | LangGraph state machine |
 | `medrag.eval.metrics` | Recall@k, MRR, nDCG |
-| `medrag.eval.questions` | Held-out question set |
+| `medrag.eval.questions` | Evaluation question set |
 | `medrag.eval.harness` | Per-config evaluation runner |
 | `medrag.api.main` | FastAPI service |
 | `medrag.ui.app` | Streamlit demo |

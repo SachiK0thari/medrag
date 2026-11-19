@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 
 from fastapi import FastAPI, HTTPException, Request
@@ -12,6 +13,8 @@ from medrag.agent.graph import MedRagAgent
 from medrag.config import MAX_QUESTION_CHARS
 from medrag.models import Answer
 from medrag.ratelimit import get_limiter
+
+_log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="medrag",
@@ -58,4 +61,9 @@ def ask(req: AskRequest, request: Request) -> Answer:
     try:
         return get_agent().answer(req.question)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        # Log the cause; never send upstream error text (LLM, Pinecone) to clients.
+        _log.exception("answer failed")
+        get_limiter().release(client)
+        raise HTTPException(
+            status_code=500, detail="The question could not be answered. Please try again."
+        ) from e

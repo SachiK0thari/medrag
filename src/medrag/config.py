@@ -75,7 +75,6 @@ class Settings(BaseSettings):
     # ---- Agent ------------------------------------------------------------ #
     max_subqueries: int = 4
     max_reflection_loops: int = 2
-    min_confidence_threshold: float = 0.6
 
     # ---- Rate limiting (UI + API; see medrag.ratelimit) ------------------- #
     rate_limit_per_client: int = 10  # questions per client per window (0 = off)

@@ -91,6 +91,23 @@ def test_a_client_refusal_does_not_spend_global_budget(clock: FakeClock):
     assert limiter.acquire("c").scope == "global"
 
 
+def test_release_refunds_the_client_window_but_not_the_global_budget(clock: FakeClock):
+    rl = make(clock, per_client=1, global_per_day=2)
+    assert rl.acquire("a").allowed
+    rl.release("a")
+    assert rl.acquire("a").allowed  # the client slot came back
+    rl.release("a")
+    refused = rl.acquire("a")  # but both attempts still count against the day
+    assert not refused.allowed
+    assert refused.scope == "global"
+
+
+def test_release_without_a_request_is_a_no_op(clock: FakeClock):
+    rl = make(clock, per_client=1)
+    rl.release("nobody")
+    assert rl.acquire("nobody").allowed
+
+
 def test_zero_turns_a_window_off(clock: FakeClock):
     limiter = make(clock, per_client=0, global_per_day=0)
     assert all(limiter.acquire("a").allowed for _ in range(1000))

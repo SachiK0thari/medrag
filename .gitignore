@@ -53,3 +53,6 @@ data/*
 
 # HF Spaces
 .huggingface/
+
+# Scrach files
+miscellaneous/

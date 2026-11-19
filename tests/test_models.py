@@ -45,7 +45,7 @@ def test_chunk_requires_non_negative_index() -> None:
         )
 
 
-def test_answer_confidence_bounded() -> None:
+def test_answer_requires_at_least_one_retrieval_call() -> None:
     base = {
         "question": "q",
         "text": "a [1]",
@@ -58,12 +58,11 @@ def test_answer_confidence_bounded() -> None:
                 snippet="evidence",
             )
         ],
-        "n_retrieval_calls": 1,
         "total_chunks_considered": 5,
     }
-    Answer(**base, confidence=0.5)
+    Answer(**base, n_retrieval_calls=1)
     with pytest.raises(ValidationError):
-        Answer(**base, confidence=1.5)
+        Answer(**base, n_retrieval_calls=0)
 
 
 def test_retrieved_chunk_method_enum() -> None:

@@ -197,7 +197,6 @@ def test_retrieval_is_scored_on_the_chunks_the_answer_saw(
                 question=question,
                 text="An answer [1].",
                 citations=[],
-                confidence=0.5,
                 n_retrieval_calls=1,
                 total_chunks_considered=len(retrieved),
             )

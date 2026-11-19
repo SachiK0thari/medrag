@@ -49,7 +49,7 @@ fused, then reranked by a cross-encoder) is the baseline. The **agent** wraps
 that baseline in an LLM loop that plans sub-queries, retrieves for each, and
 checks whether the evidence is sufficient before answering.
 
-33 held-out GLP-1 / cardiovascular questions and ten configurations, with
+33 GLP-1 / cardiovascular evaluation questions and ten configurations, with
 `deepseek/deepseek-v4.1-flash`. The three agentic rows below are means of
 three runs each. The results and per-step traces are committed, so every
 evaluation number in this README regenerates offline in a few seconds:
@@ -266,7 +266,7 @@ medrag/
 │   ├── ingestion/          ← PubMed → PMC → chunk → embed
 │   ├── retrieval/          ← BM25 + dense + RRF + rerank
 │   ├── agent/              ← LangGraph loop, prompts, LLM wrapper
-│   ├── eval/               ← Metrics, harness, held-out questions
+│   ├── eval/               ← Metrics, harness, evaluation questions
 │   ├── api/                ← FastAPI service
 │   └── ui/                 ← Streamlit demo
 ├── tests/                  ← pytest, runs in CI
@@ -309,8 +309,8 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 132 unit tests that run in under two seconds with no network and
-  no model downloads. Line coverage is 78% overall and 94% on the agent graph;
+- **Tests** — 162 unit tests that run in under two seconds with no network and
+  no model downloads. Line coverage is 79% overall and 95% on the agent graph;
   the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
 - **Reproducible ingestion** — papers are persisted to SQLite, and

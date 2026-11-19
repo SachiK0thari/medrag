@@ -354,7 +354,6 @@ def test_reflect_with_no_retrieved_chunks_goes_straight_to_answer(scripted_llm):
     _, answer = _agent(hybrid, FakeReranker()).run("Q?")
     assert "reflect" not in fake.calls
     assert answer.citations == []
-    assert answer.confidence == 0.0
     assert answer.total_chunks_considered == 0
 
 
