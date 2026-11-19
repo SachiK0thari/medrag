@@ -70,7 +70,7 @@ class _SharedComponents:
         self._dense: DenseRetriever | None = None
         self._hybrid: HybridRetriever | None = None
         self._reranker: Reranker | None = None
-        self._agents: dict[tuple[bool, bool, int | None, bool, bool], MedRagAgent] = {}
+        self._agents: dict[tuple[bool, bool, int | None, bool, bool, int | None], MedRagAgent] = {}
 
     def store(self) -> Store:
         if self._store is None:
@@ -105,6 +105,7 @@ class _SharedComponents:
         max_reflection_loops: int | None = None,
         faithful_decomposition: bool = False,
         single_rerank: bool = False,
+        single_rerank_keep: int | None = None,
     ) -> MedRagAgent:
         """One agent per knob combination, all sharing the retrieval stack."""
         key = (
@@ -113,6 +114,7 @@ class _SharedComponents:
             max_reflection_loops,
             faithful_decomposition,
             single_rerank,
+            single_rerank_keep,
         )
         if key not in self._agents:
             self._agents[key] = MedRagAgent(
@@ -124,6 +126,7 @@ class _SharedComponents:
                 max_reflection_loops=max_reflection_loops,
                 faithful_decomposition=faithful_decomposition,
                 single_rerank=single_rerank,
+                single_rerank_keep=single_rerank_keep,
             )
         return self._agents[key]
 
@@ -197,6 +200,7 @@ class AgenticConfig:
         max_reflection_loops: int | None = None,
         faithful_decomposition: bool = False,
         single_rerank: bool = False,
+        single_rerank_keep: int | None = None,
     ) -> None:
         self.name = name
         self._c = components
@@ -205,6 +209,7 @@ class AgenticConfig:
         self._max_reflection_loops = max_reflection_loops
         self._faithful_decomposition = faithful_decomposition
         self._single_rerank = single_rerank
+        self._single_rerank_keep = single_rerank_keep
 
     def agent(self) -> MedRagAgent:
         return self._c.agent(
@@ -213,6 +218,7 @@ class AgenticConfig:
             max_reflection_loops=self._max_reflection_loops,
             faithful_decomposition=self._faithful_decomposition,
             single_rerank=self._single_rerank,
+            single_rerank_keep=self._single_rerank_keep,
         )
 
     def run(self, question: str) -> EvalResult:
@@ -251,6 +257,16 @@ def build_all_configs() -> list[EvalConfig]:
             rerank_against_original=True,
             faithful_decomposition=True,
             single_rerank=True,
+        ),
+        # The same, keeping 20 candidates per sub-query for the pool rerank.
+        AgenticConfig(
+            components,
+            name="agentic_v2_single_rerank_20",
+            keep_original_query=True,
+            rerank_against_original=True,
+            faithful_decomposition=True,
+            single_rerank=True,
+            single_rerank_keep=20,
         ),
     ]
     return configs

@@ -158,15 +158,18 @@ development questions:
 | Development set, 3 runs | Rerank pairs per answer | Rerank time | p50 latency | p95 latency | Recall@10 | vs v2 (95% CI) |
 |---|---|---|---|---|---|---|
 | **Agentic v2** | 84 | 12.5 s | 13.6 s | 31.8 s | 0.495 | — |
-| Single rerank | 19 | 3.4 s | 6.2 s | 13.6 s | 0.456 | −0.039 (−0.120 to +0.042) |
+| Single rerank, keep 10 | 19 | 3.4 s | 6.2 s | 13.6 s | 0.456 | −0.039 (−0.120 to +0.042) |
+| Single rerank, keep 20 | 39 | 6.2 s | 9.4 s | 25.0 s | 0.465 | −0.030 (−0.081 to +0.017) |
 
 The cross-encoder does a quarter of the work and the median answer takes
 under half as long. Recall on the curated labels is nominally lower in all
 three runs (0.449 to 0.460 against 0.485 to 0.505), with an interval that
 includes zero. Against the larger extended label set the two are level
 (−0.011, −0.053 to +0.030), and on the strict labels single rerank is ahead
-(+0.037, −0.056 to +0.139). v2 stays the default: this is a development-set
-result, so switching would first need the test split to agree. On the live
+(+0.037, −0.056 to +0.139). Keeping 20 candidates per sub-query instead of 10
+lands between the two on every measure and buys back little recall. Neither
+variant is a clear win, so v2 stays the default and the test split was not
+spent on either. On the live
 demo, which uses Pinecone's hosted reranker, it would also cut rerank
 requests from about three per question to about one, roughly tripling what the monthly
 quota covers. Reproduce it with

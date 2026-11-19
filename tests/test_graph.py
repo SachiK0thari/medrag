@@ -430,6 +430,17 @@ def test_single_rerank_scores_each_chunk_once_against_the_question(
     assert merge["rerank_pairs"] == 3
 
 
+def test_single_rerank_keep_sets_candidates_per_subquery(scripted_llm):
+    scripted_llm()
+    hybrid = FakeHybrid({"sq1": [_rc(str(i)) for i in range(5)]})
+    reranker = FakeReranker()
+    agent = _agent(
+        hybrid, reranker, rerank_against_original=True, single_rerank=True, single_rerank_keep=3
+    )
+    agent.run("Q?")
+    assert reranker.calls == [("Q?", 3)]
+
+
 def test_single_rerank_needs_the_pool_rerank(scripted_llm):
     """Without the pool rerank there would be no reranking at all, so it is ignored."""
     scripted_llm()

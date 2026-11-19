@@ -286,11 +286,20 @@ the answer's rerank pairs and rerank seconds.
 |---|---|---|---|---|---|
 | agentic_v2 | 84 (75) | 12.5 | 13.6 s | 31.8 s | 0.485, 0.505, 0.495 |
 | agentic_v2_single_rerank | 19 (16) | 3.4 | 6.2 s | 13.6 s | 0.449, 0.460, 0.460 |
+| agentic_v2_single_rerank_20 | 39 (29) | 6.2 | 9.4 s | 25.0 s | 0.475, 0.444, 0.475 |
 
 | Recall vs agentic_v2 (95% CI) | Curated | Extended |
 |---|---|---|
-| Lenient | −0.039 (−0.120 to +0.042) | −0.011 (−0.053 to +0.030) |
-| Strict | +0.037 (−0.056 to +0.139) | +0.003 (−0.046 to +0.059) |
+| Keep 10, lenient | −0.039 (−0.120 to +0.042) | −0.011 (−0.053 to +0.030) |
+| Keep 10, strict | +0.037 (−0.056 to +0.139) | +0.003 (−0.046 to +0.059) |
+| Keep 20, lenient | −0.030 (−0.081 to +0.017) | −0.004 (−0.029 to +0.021) |
+| Keep 20, strict | −0.046 (−0.194 to +0.074) | +0.000 (−0.028 to +0.027) |
+
+The keep-20 rows were run the next morning (`agentic_v2_single_rerank_20`,
+added to the same three result files), so its latency is from a different
+session than the other two. Three of its 99 RAGAS scorings failed on the
+DeepSeek empty-output truncation, which the answer path now retries and
+the RAGAS client does not; its faithfulness is over the other 96.
 
 - Pairs fall by 77%, not by half: the first pass scores every fused
   candidate, not just the 10 it keeps, so it accounts for most of the work.
@@ -300,9 +309,13 @@ the answer's rerank pairs and rerank seconds.
   RRF for a sub-query but would have been reranked into its top 10.
 - Faithfulness is unchanged (0.974 against 0.965), as are words and
   citations per answer.
-- Not shipped: it was measured on the development set only. A natural next
-  variant keeps more candidates per sub-query (say 20) before the single
-  rerank, which would buy some recall back for some of the saved time.
+- Keeping 20 per sub-query costs twice the pairs of keeping 10 and buys
+  little back: curated recall 0.465 against 0.456, and on strict curated
+  labels it is the lowest of the three. Every difference here is inside the
+  noise.
+- Not shipped. Neither variant is a clear win on the development set, so
+  the test split was not spent on either; it stays reserved for confirming a
+  change that does win.
 
 ## Run 1: the abstracts-only corpus
 

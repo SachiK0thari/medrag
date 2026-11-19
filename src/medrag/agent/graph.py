@@ -24,7 +24,8 @@ values explicitly so the benchmark keeps a true "before" row. See
 - ``single_rerank``: with ``rerank_against_original``, skip the per-sub-query
   rerank and cut each sub-query's fused list by RRF rank instead, so every
   chunk goes through the cross-encoder once (in the pool rerank) rather than
-  twice. An experiment; off by default.
+  twice. An experiment; off by default. ``single_rerank_keep`` sets how many
+  candidates each sub-query keeps for the pool (default ``rerank_top_k``).
 - ``max_reflection_loops``: override the settings value (0 disables reflect).
 - ``faithful_decomposition``: use the v2 planner prompt that keeps named
   entities verbatim and returns a single sub-query for atomic questions.
@@ -285,6 +286,7 @@ class MedRagAgent:
         max_reflection_loops: int | None = None,
         faithful_decomposition: bool = True,
         single_rerank: bool = False,
+        single_rerank_keep: int | None = None,
     ) -> None:
         self._settings = get_settings()
         self._store = store
@@ -296,6 +298,7 @@ class MedRagAgent:
         # Only meaningful with the pool rerank: without it the per-sub-query
         # scores are the only ranking there is.
         self._single_rerank = single_rerank and rerank_against_original
+        self._single_rerank_keep = single_rerank_keep or self._settings.rerank_top_k
         self._max_reflection_loops = (
             max_reflection_loops
             if max_reflection_loops is not None
@@ -372,7 +375,7 @@ class MedRagAgent:
                 continue
             if self._single_rerank:
                 # The pool rerank below scores these against the question.
-                reranked = fused[: self._settings.rerank_top_k]
+                reranked = fused[: self._single_rerank_keep]
             else:
                 started = time.perf_counter()
                 reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
