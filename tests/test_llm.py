@@ -78,6 +78,19 @@ def test_reasoning_flag_is_always_sent_and_defaults_off(fake_client):
     assert c.kwargs["extra_body"]["usage"] == {"include": True}  # type: ignore[index]
 
 
+def test_ignored_providers_are_sent_to_openrouter(fake_client):
+    c = fake_client()
+    llm.complete("sys", "user")
+    assert c.kwargs["extra_body"]["provider"] == {"ignore": ["Novita"]}  # type: ignore[index]
+
+
+def test_no_provider_field_when_nothing_is_ignored(fake_client, monkeypatch):
+    monkeypatch.setattr(llm.get_settings(), "llm_ignore_providers", " , ")
+    c = fake_client()
+    llm.complete("sys", "user")
+    assert "provider" not in c.kwargs["extra_body"]  # type: ignore[operator]
+
+
 def test_reasoning_can_be_overridden_per_call(fake_client):
     c = fake_client()
     llm.complete("sys", "user", reasoning=True)

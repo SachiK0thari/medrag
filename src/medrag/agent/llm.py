@@ -183,6 +183,9 @@ def complete(
         "usage": {"include": True},
         "reasoning": {"enabled": use_reasoning},
     }
+    # Skip providers known to ignore the reasoning flag (LLM_IGNORE_PROVIDERS).
+    if routing := settings.llm_provider_routing:
+        extra_body["provider"] = routing
 
     @retry(
         retry=retry_if_exception_type((RateLimitError, APIConnectionError, APITimeoutError)),
@@ -221,7 +224,8 @@ def complete(
     response = _to_response(_call(), settings.llm_model)
     _warn_if_truncated(response, effective_max_tokens)
     # DeepSeek V4.1 Flash occasionally reasons despite ``reasoning: {enabled:
-    # false}`` (some OpenRouter providers seem to ignore the flag) and spends
+    # false}`` (Novita ignores the flag and is skipped by default, see
+    # LLM_IGNORE_PROVIDERS; this guards against any other) and spends
     # the whole token cap thinking, returning empty text. It is intermittent,
     # so one more call almost always succeeds. Only retry when reasoning was
     # meant to be off: with it on, an empty reply means the cap is too small

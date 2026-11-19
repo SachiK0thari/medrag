@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     llm_model: str = "deepseek/deepseek-v4.1-flash"  # any OpenRouter model id
     llm_reasoning_enabled: bool = False  # OpenRouter `reasoning: {enabled: true}`
+    # OpenRouter providers never to route to, comma-separated. Novita served
+    # DeepSeek V4.1 Flash with hidden reasoning on all 5 of the 200 probe calls
+    # it got (2026-11-19) although the request turned reasoning off; the other
+    # 18 providers did not reason on any. Reasoning tokens count against
+    # max_tokens, so such calls can return empty text.
+    llm_ignore_providers: str = "Novita"
     llm_throttle_s: float = 0.0  # min seconds between LLM calls (0 = off)
     llm_temperature: float = 0.1
     llm_max_tokens: int = 1024
@@ -48,6 +54,12 @@ class Settings(BaseSettings):
     # each, so 20 s x 2 attempts caps a stalled call at about 45 s.
     llm_online_timeout_s: float = 20.0
     llm_online_max_attempts: int = 2
+
+    @property
+    def llm_provider_routing(self) -> dict[str, list[str]]:
+        """OpenRouter's `provider` request field ({} when nothing is ignored)."""
+        ignore = [p.strip() for p in self.llm_ignore_providers.split(",") if p.strip()]
+        return {"ignore": ignore} if ignore else {}
 
     # ---- Embeddings ------------------------------------------------------- #
     embedding_model: str = "BAAI/bge-small-en-v1.5"

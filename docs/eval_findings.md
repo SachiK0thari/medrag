@@ -311,8 +311,10 @@ the answer's rerank pairs and rerank seconds.
 The keep-20 rows were run the next morning (`agentic_v2_single_rerank_20`,
 added to the same three result files), so its latency is from a different
 session than the other two. Three of its 99 RAGAS scorings failed on the
-DeepSeek empty-output truncation, which the answer path now retries and
-the RAGAS client does not; its faithfulness is over the other 96.
+DeepSeek empty-output truncation; its faithfulness is over the other 96.
+Since then both clients skip the provider behind it (Novita, which reasoned
+on all 5 of 200 probe calls it served with reasoning off; the other 18
+providers on none) and retry a truncated reply once.
 
 - Pairs fall by 77%, not by half: the first pass scores every fused
   candidate, not just the 10 it keeps, so it accounts for most of the work.

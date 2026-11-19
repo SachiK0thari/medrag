@@ -15,6 +15,7 @@ import math
 
 from langchain_openai import ChatOpenAI
 from ragas import SingleTurnSample
+from ragas.exceptions import LLMDidNotFinishException
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import Faithfulness
 
@@ -40,7 +41,10 @@ def _get_llm() -> LangchainLLMWrapper:
             # room for it, and keep hidden reasoning from eating the budget
             # (see the note in medrag.agent.llm.complete).
             max_tokens=4096,
-            extra_body={"reasoning": {"enabled": False}},
+            extra_body={
+                "reasoning": {"enabled": False},
+                **({"provider": routing} if (routing := settings.llm_provider_routing) else {}),
+            },
         )
         _llm = LangchainLLMWrapper(chat)
     return _llm
@@ -71,11 +75,25 @@ def compute_faithfulness(
     scorer = Faithfulness()
     scorer.llm = _get_llm()
 
-    try:
-        score = asyncio.run(scorer.single_turn_ascore(sample))
-    except Exception as e:
-        _log.warning("faithfulness scorer failed: %s: %s", type(e).__name__, e)
-        return None
+    # RAGAS goes through its own client, so the empty-reply retry in
+    # medrag.agent.llm.complete does not cover it. The failure is the same:
+    # DeepSeek V4.1 Flash now and then reasons despite the flag, spends the
+    # token cap and RAGAS raises LLMDidNotFinishException. It is intermittent,
+    # so score once more before giving up; any other error is not retried.
+    score: object = None
+    for attempt in (1, 2):
+        try:
+            score = asyncio.run(scorer.single_turn_ascore(sample))
+            break
+        except LLMDidNotFinishException as e:
+            if attempt == 1:
+                _log.warning("faithfulness scorer hit the token cap; retrying once")
+                continue
+            _log.warning("faithfulness scorer failed: %s: %s", type(e).__name__, e)
+            return None
+        except Exception as e:
+            _log.warning("faithfulness scorer failed: %s: %s", type(e).__name__, e)
+            return None
 
     if score is None or not isinstance(score, int | float) or math.isnan(score):
         _log.warning("faithfulness scorer returned non-numeric result: %r", score)

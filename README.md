@@ -40,7 +40,11 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 
 <sub>Recorded from the app running locally (`python scripts/record_demo.py`).
 The wait is shortened in the recording; the latency shown in the app is the
-real one for that query.</sub>
+real one for that query. This one took 18 s against a 14 s median. Most of
+that time is the cross-encoder reranking on CPU; reranking each chunk once
+instead of twice
+[cuts the median to 6 s](#reranking-each-chunk-once), with recall nominally
+lower.</sub>
 
 ---
 
@@ -240,7 +244,10 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
   questions checks it. Only a second model has reviewed its 139 labels, on
   a sample (below), and 20 questions give wide intervals. Faithfulness is not compared on it: the
   judge model hit its token cap on 9 of the 80 answers, against 1 of 99 on
-  the development runs.
+  the development runs. A later probe traced this to one OpenRouter
+  provider, Novita, which reasoned on every call it served although
+  reasoning was off; it is now skipped (`LLM_IGNORE_PROVIDERS`) and the
+  scorer retries a truncated reply once, but these runs predate the fix.
 - **Gold labels are LLM-curated** from a pooled BM25 + dense candidate set
   (`scripts/curate_gold.py`). A second model (Claude Opus 5.5) reviewed 28
   of the 90 labels, not blind to the judge: none were irrelevant, 14
