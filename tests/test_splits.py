@@ -13,7 +13,7 @@ def test_dev_split_keeps_the_original_file_names() -> None:
     files = split_files("dev", Path("/data"))
     assert files.results == Path("/data/eval_results.csv")
     assert files.curation_audit == Path("/data/gold_curation_audit.json")
-    assert files.grades_human == Path("/data/gold_spotcheck_verdicts.json")
+    assert files.grades_review == Path("/data/gold_spotcheck_verdicts.json")
     assert files.gold_pmids_module.name == "gold_pmids.py"
     assert files.module_name("gold_grades") == "medrag.eval.gold_grades"
 

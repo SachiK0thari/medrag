@@ -166,7 +166,7 @@ under half as long. Recall on the curated labels is nominally lower in all
 three runs (0.449 to 0.460 against 0.485 to 0.505), with an interval that
 includes zero. Against the larger extended label set the two are level
 (−0.011, −0.053 to +0.030), and on the strict labels single rerank is ahead
-(+0.037, −0.056 to +0.139). Keeping 20 candidates per sub-query instead of 10
+(+0.031, −0.083 to +0.156). Keeping 20 candidates per sub-query instead of 10
 lands between the two on every measure and buys back little recall. Neither
 variant is a clear win, so v2 stays the default and the test split was not
 spent on either. On the live
@@ -237,22 +237,33 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
 - **The 33 questions tuned the agent.** Every ablation was scored on them, so
   the main table is development-set performance. The
   [test split](#on-20-questions-never-used-for-tuning) of 20 untouched
-  questions checks it. Its 139 labels are not hand-checked yet, and 20
-  questions give wide intervals. Faithfulness is not compared on it: the
+  questions checks it. Only a second model has reviewed its 139 labels, on
+  a sample (below), and 20 questions give wide intervals. Faithfulness is not compared on it: the
   judge model hit its token cap on 9 of the 80 answers, against 1 of 99 on
   the development runs.
 - **Gold labels are LLM-curated** from a pooled BM25 + dense candidate set
-  (`scripts/curate_gold.py`). I hand-checked 28 of the 90 labels: none were
-  irrelevant, 14 directly answer the question and 14 are only on topic.
+  (`scripts/curate_gold.py`). A second model (Claude Opus 5.5) reviewed 28
+  of the 90 labels, not blind to the judge: none were irrelevant, 14
+  directly answer the question and 14 are only on topic.
 - **The labels were chosen on the abstracts-only corpus, and full text
   outgrew them.** Of the 8 papers in the baseline's context, 1.3 carry one of
   those labels. A judge graded the rest from the abstract and the
-  best-matching body passages (`scripts/extend_gold.py`): 1,427
-  question–paper pairs covering 315 papers, of which 336 answer their
-  question directly. Recall in the table counts those as gold; 13 already
-  were, so 323 labels are new. I hand-checked a random 30 of the 336: 27 answer their question,
-  3 are only on topic and none is irrelevant. That is 90% agreement; with 30
-  papers the true rate could be anywhere from 74% to 97%.
+  best-matching body passages (`scripts/extend_gold.py`): 1,433
+  question–paper pairs covering 315 papers, of which 339 answer their
+  question directly. Recall in the table counts those as gold; 16 already
+  were, so 323 labels are new. The same model reviewed a random 30 of the
+  336 graded direct before the last 3 were added, with the judge's reasons
+  visible: 26 answer their question, 4 are on topic but don't, 0 are
+  irrelevant. That is 87%
+  agreement; with 30 papers the true rate could be anywhere from 70% to 95%.
+  About a quarter of the 26 rest on a single sentence in a paper about
+  something else, which a stricter reviewer could count as on topic only.
+- **On the test split the same model did the same review**, again not blind
+  to the judge. Of 20 extension papers graded direct, 19 answer their
+  question and 1 is on topic only. Of 20 curated labels it gave the judge's
+  grade to 18 (Cohen's κ 0.77), and on the other 2 it was more lenient. Its
+  marks are kept for agreement only: a second model's verdicts do not replace
+  the judge's grades, so no score in this README depends on them.
 - **Retrieval is scored on what the answer saw:** the distinct papers behind
   the 10 chunks the answer is written from, about 8 papers. Scoring each
   config's whole ranking compared lists of different lengths.
@@ -270,11 +281,11 @@ question → decompose → [BM25 + dense → RRF → rerank] → reflect → ans
   the extended set v1 is 0.057 below the baseline (95% CI −0.102 to −0.015).
   On the original 90 labels alone it is 0.064 below (−0.160 to +0.029) and
   the re-scored merge gains 0.012 over it (−0.052 to +0.077), so that set
-  cannot separate v1 from its fixes. On its 18-question strict subset v1 is
-  nominally ahead of the baseline (0.670 against 0.611).
-- **What is not robust:** BM25 against dense. On abstracts the order flipped
-  between gold sets. On full text dense is ahead on the original labels and
-  inside the noise on the extended ones.
+  cannot separate v1 from its fixes. On its 16-question strict subset v1 is
+  nominally ahead of the baseline (0.726 against 0.698).
+- **What is not robust:** BM25 against dense. On abstracts dense is ahead
+  under both gold sets, each time inside the noise. On full text dense is
+  ahead on the original labels and level with BM25 on the extended ones.
 
 ## Stack
 
@@ -364,8 +375,9 @@ medrag/
 3. **Make the critic emit a search query.** Today the follow-up search uses
    the critic's complaint verbatim, and reflection has not moved recall on
    either corpus.
-4. **Hand-check the papers the judge graded "related".** The sample of 30
-   covered only its "direct" grades. A related paper that does answer its
+4. **Have a person review the judge's grades.** Both reviews so far are by a
+   second model that could see the judge's reasons, and they sampled only its
+   "direct" grades. A related paper that does answer its
    question is scored as a miss.
 5. **Judge passages, not papers.** A config is credited for a paper whichever
    of its chunks it retrieved. The traces record the chunk IDs of every

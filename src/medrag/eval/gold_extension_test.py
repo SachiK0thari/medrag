@@ -9,9 +9,9 @@ pool), judged by it and not picked, and picked as gold but graded only
 best-matching body passages. The gold labels in `gold_pmids.py` and the
 grades in `gold_grades.py` are unchanged.
 
-`HUMAN_CHECK` is a hand-check of a random sample of the papers graded 2
-(empty when no hand-check has been saved). It is kept for comparison:
-`EXTENSION_GRADES` holds the judge's grades whatever the hand-check says.
+`REVIEW_CHECK` is a second review of a random sample of the papers graded 2
+(empty when none has been saved). It is kept for comparison:
+`EXTENSION_GRADES` holds the judge's grades whatever the review says.
 """
 
 from __future__ import annotations
@@ -1105,4 +1105,15 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
     },
 }
 
-HUMAN_CHECK: dict[str, dict[str, int]] = {}
+REVIEW_CHECK: dict[str, dict[str, int]] = {
+    "t01": {"41095961": 2, "41678007": 2, "41697744": 2},
+    "t04": {"40592407": 2, "41404443": 2},
+    "t05": {"41255131": 2, "41717504": 2},
+    "t09": {"40886073": 2},
+    "t12": {"40555920": 2, "41566974": 2},
+    "t13": {"40978810": 2},
+    "t14": {"41065947": 2},
+    "t16": {"41053738": 2, "41444586": 2},
+    "t18": {"41296780": 2, "41406444": 1, "41870800": 2},
+    "t19": {"41234532": 2, "41404443": 2, "41566974": 2},
+}

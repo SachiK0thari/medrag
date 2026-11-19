@@ -1,4 +1,4 @@
-"""Build hand-check sheets for a split's labels, and read the marked sheets back.
+"""Build review sheets for a split's labels, and read the marked sheets back.
 
 Two sheets, each a fixed random sample:
 
@@ -17,9 +17,17 @@ sits in a collapsed block below each paper, to read after deciding.
 `grade_gold.py --split <split>` and `extend_gold.py --split <split> --no-grade`
 afterwards to fold them into the generated modules.
 
+Pass `--model` when a model, not a person, marked the sheets. Its verdicts are
+then kept for measuring agreement only: `grade_gold.py` does not let them
+replace the judge's grades. `--not-blind` records that the reviewer could see
+the judge's reasons while marking.
+
 Usage:
     python scripts/spotcheck_sheet.py make --split test
-    python scripts/spotcheck_sheet.py collect --split test --reviewer "Sachi Kothari"
+    python scripts/spotcheck_sheet.py collect --split test --reviewer "Claude Opus 5.5" \
+        --model --not-blind
+    python scripts/spotcheck_sheet.py collect --split dev --sheet extension \
+        --reviewer "Claude Opus 5.5" --model --not-blind
 """
 
 from __future__ import annotations
@@ -141,7 +149,7 @@ def make(split: str) -> None:
     paths = sheet_paths(split)
     _write_sheet(
         paths["gold"],
-        f"Gold-label hand-check sheet, {split} split",
+        f"Gold-label review sheet, {split} split",
         f"{len(gold_picks)} of the {len(gold_pairs)} curated gold labels, drawn with "
         f"`random.Random({SEED}).sample` over the sorted (qid, pmid) pairs. Judge the "
         "abstract alone, as `scripts/grade_gold.py` does.",
@@ -153,7 +161,7 @@ def make(split: str) -> None:
     )
     _write_sheet(
         paths["extension"],
-        f"Extension-label hand-check sheet, {split} split",
+        f"Extension-label review sheet, {split} split",
         f"{len(ext_picks)} of the {len(ext_pairs)} papers `scripts/extend_gold.py` graded "
         f"direct, drawn with `random.Random({SEED}).sample` over the sorted (qid, pmid) "
         "pairs. The abstract and passages are exactly what the judge read.",
@@ -184,14 +192,18 @@ def parse_sheet(path: Path) -> dict[str, dict[str, dict[str, str]]]:
     return verdicts
 
 
-def collect(split: str, reviewer: str) -> None:
+def collect(split: str, reviewer: str, sheets: list[str], model: bool, blind: bool) -> None:
     files = split_files(split, get_settings().data_dir)
     paths = sheet_paths(split)
-    for kind, out in (("gold", files.grades_human), ("extension", files.extension_human)):
+    outs = {"gold": files.grades_review, "extension": files.extension_review}
+    for kind in sheets:
+        out = outs[kind]
         verdicts = parse_sheet(paths[kind])
         n = sum(len(v) for v in verdicts.values())
         record = {
             "reviewer": reviewer,
+            "reviewer_kind": "model" if model else "person",
+            "blind_to_judge": blind,
             "date": date.today().isoformat(),
             "sample": f"{n} {kind} labels from {paths[kind].name}, "
             f"random.Random({SEED}).sample over the sorted (qid, pmid) pairs",
@@ -212,12 +224,20 @@ def main() -> None:
     m.add_argument("--split", choices=SPLITS, default="test")
     c = sub.add_parser("collect", help="Turn the marked sheets into verdict files.")
     c.add_argument("--split", choices=SPLITS, default="test")
-    c.add_argument("--reviewer", required=True, help="Name of the person who marked the sheets.")
+    c.add_argument("--reviewer", required=True, help="Who marked the sheets (a person or a model).")
+    c.add_argument("--model", action="store_true", help="A model marked the sheets, not a person.")
+    c.add_argument(
+        "--not-blind", action="store_true", help="The reviewer could see the judge's reasons."
+    )
+    c.add_argument(
+        "--sheet", choices=("gold", "extension", "both"), default="both", help="Sheets to collect."
+    )
     args = parser.parse_args()
     if args.cmd == "make":
         make(args.split)
     else:
-        collect(args.split, args.reviewer)
+        sheets = ["gold", "extension"] if args.sheet == "both" else [args.sheet]
+        collect(args.split, args.reviewer, sheets, args.model, not args.not_blind)
 
 
 if __name__ == "__main__":

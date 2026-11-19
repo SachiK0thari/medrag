@@ -31,9 +31,9 @@ module, `src/medrag/eval/gold_extension.py`, which `scripts/analyze_eval.py`
 uses to report retrieval against the original gold and against the gold plus
 every paper graded direct here.
 
-A hand-check of a sample of the papers graded direct, if one has been saved as
-`data/gold_extension_spotcheck_verdicts.json`, is written into the module as
-`HUMAN_CHECK`. It sits beside the judge's grades and does not change them.
+A second review of a sample of the papers graded direct, if one has been saved
+as `data/gold_extension_spotcheck_verdicts.json`, is written into the module as
+`REVIEW_CHECK`. It sits beside the judge's grades and does not change them.
 
 Usage:
     python scripts/extend_gold.py --traces data/eval_traces.jsonl data/eval_traces_rep2.jsonl
@@ -152,8 +152,8 @@ def grade_batch(
     return out
 
 
-def load_human_check(path: Path) -> dict[str, dict[str, int]]:
-    """The hand-check of a sample of the papers graded direct, on the judge's scale."""
+def load_review_check(path: Path) -> dict[str, dict[str, int]]:
+    """The second review of a sample of the papers graded direct, on the judge's scale."""
     if not path.exists():
         return {}
     verdicts = json.loads(path.read_text())["verdicts"]
@@ -166,7 +166,7 @@ def load_human_check(path: Path) -> dict[str, dict[str, int]]:
 def write_module(
     grades: dict[str, dict[str, int]],
     judged_before: dict[str, set[str]],
-    human: dict[str, dict[str, int]],
+    review: dict[str, dict[str, int]],
     out_path: Path,
 ) -> None:
     lines = [
@@ -181,9 +181,9 @@ def write_module(
         "best-matching body passages. The gold labels in `gold_pmids.py` and the",
         "grades in `gold_grades.py` are unchanged.",
         "",
-        "`HUMAN_CHECK` is a hand-check of a random sample of the papers graded 2",
-        "(empty when no hand-check has been saved). It is kept for comparison:",
-        "`EXTENSION_GRADES` holds the judge's grades whatever the hand-check says.",
+        "`REVIEW_CHECK` is a second review of a random sample of the papers graded 2",
+        "(empty when none has been saved). It is kept for comparison:",
+        "`EXTENSION_GRADES` holds the judge's grades whatever the review says.",
         '"""',
         "",
         "from __future__ import annotations",
@@ -198,9 +198,9 @@ def write_module(
     for qid in sorted(grades):
         inner = ", ".join(f"{_dq(p)}: {g}" for p, g in sorted(grades[qid].items()))
         lines.append(f"    {_dq(qid)}: {{{inner}}},")
-    lines += ["}", "", "HUMAN_CHECK: dict[str, dict[str, int]] = {"]
-    for qid in sorted(human):
-        inner = ", ".join(f"{_dq(p)}: {g}" for p, g in sorted(human[qid].items()))
+    lines += ["}", "", "REVIEW_CHECK: dict[str, dict[str, int]] = {"]
+    for qid in sorted(review):
+        inner = ", ".join(f"{_dq(p)}: {g}" for p, g in sorted(review[qid].items()))
         lines.append(f"    {_dq(qid)}: {{{inner}}},")
     lines += ["}", ""]
     out_path.write_text("\n".join(lines))
@@ -244,8 +244,8 @@ def main() -> None:
         for qid, papers in audit.items()
         if papers
     }
-    human = load_human_check(files.extension_human)
-    write_module(grades, judged_before, human, files.gold_extension_module)
+    review = load_review_check(files.extension_review)
+    write_module(grades, judged_before, review, files.gold_extension_module)
     counts = Counter(g for papers in grades.values() for g in papers.values())
     print(f"\nWrote {files.gold_extension_module.relative_to(PROJECT_ROOT)}")
     print(f"  graded {sum(counts.values())} papers: {dict(sorted(counts.items()))}")
@@ -253,9 +253,9 @@ def main() -> None:
         f"  questions that gain a grade-2 paper: "
         f"{sum(1 for papers in grades.values() if 2 in papers.values())}/{len(questions)}"
     )
-    if human:
-        checked = Counter(g for papers in human.values() for g in papers.values())
-        print(f"  hand-checked {sum(checked.values())}: {dict(sorted(checked.items()))}")
+    if review:
+        checked = Counter(g for papers in review.values() for g in papers.values())
+        print(f"  reviewed {sum(checked.values())}: {dict(sorted(checked.items()))}")
 
 
 def grade_candidates(

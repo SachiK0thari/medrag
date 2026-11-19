@@ -107,10 +107,10 @@ that best match the question.
 |---|---|---|---|---|
 | Never judged | 977 | 224 | 595 | 158 |
 | Judged, passed over | 415 | 99 | 263 | 53 |
-| Gold, graded "related" on the abstract | 35 | 13 | 22 | 0 |
+| Gold, graded "related" on the abstract | 41 | 16 | 25 | 0 |
 
-The counts are question–paper pairs: 1,427 of them over 315 distinct papers,
-with 336 graded direct. Thirteen of the 336 were already gold, so the
+The counts are question–paper pairs: 1,433 of them over 315 distinct papers,
+with 339 graded direct. Sixteen of the 339 were already gold, so the
 extension adds 323 labels to the original 90.
 
 A quarter of the papers the curation passed over on their abstract answer the
@@ -131,14 +131,27 @@ context. **Neither gold set says whether full text made paper-level retrieval
 better or worse than run 1.** What they support is the comparison between
 configs within run 2.
 
-The extension labels come from one LLM judge. I hand-checked a random sample
-of 30 of the 336 papers it graded direct (`HUMAN_CHECK` in
-`src/medrag/eval/gold_extension.py`), reading the same abstract and passages
-the judge read: 27 answer their question, 3 are only on topic and none is
-irrelevant. That is 90% agreement, and with 30 papers the true rate could be
-anywhere from 74% to 97% (Wilson 95% interval). The three stay in the
-extended set: the sample measures the error, and removing only the errors it
-happened to draw would not make the other labels better. The 880 papers the
+The extension labels come from one LLM judge. A second model (Claude Opus
+5.5) reviewed a random 30 of the 336 papers it had graded direct (`REVIEW_CHECK`
+in `src/medrag/eval/gold_extension.py`), reading the same abstract and
+passages the judge read, with the judge's reasons visible: 26 answer their
+question, 4 are on topic but don't, 0 are irrelevant. That is 87% agreement,
+and with 30 papers the true rate could be anywhere from 70% to 95% (Wilson
+95% interval). The review was not blind, so it measures agreement between two
+models, not correctness. About a quarter of the 26 rest on a single sentence
+in a paper about something else; several others answer only for a narrow
+population, such as levothyroxine users. The four stay in the extended set:
+the sample measures the error, and removing only the errors it happened to
+draw would not make the other labels better.
+
+On the test split the same model reviewed 20 of the 97 papers graded direct
+(19 answer their question, 1 is on topic only; 95%, interval 76% to 99%) and
+20 of the 50 curated labels, judged on the abstract alone as
+`scripts/grade_gold.py` does. On those it gave the judge's grade to 18 of 20
+(Cohen's κ 0.77) and was more lenient on the other two. A second model's
+verdicts are recorded for agreement only (`REVIEW_GRADES` in
+`gold_grades_test.py`); unlike a person's review they do not replace the
+judge's grades, so no test-split score depends on them. The 883 papers the
 judge graded related were not sampled. The original 90 labels and their
 grades are untouched.
 
@@ -173,10 +186,10 @@ grades are untouched.
   ones the curation never judged, the most of any config.
 - **Its gap to dense is not settled.** On the extended set BM25 is 0.031
   below dense (95% CI −0.094 to +0.039) and on the strict version the two
-  tie (0.286 against 0.290). On the original labels dense is well ahead
+  tie (0.287 against 0.290). On the original labels dense is well ahead
   (0.470 against 0.293), and those labels lean towards the dense pool. In
-  run 1 the order flipped between gold sets, so I still make no claim about
-  the pair.
+  run 1 dense was ahead under both gold sets, each time inside the noise, so
+  I still make no claim about the pair.
 
 ### The agentic loop
 
@@ -201,9 +214,9 @@ grades are untouched.
   not separate v1 from its fixes.** Against them v1 is 0.064 below the
   baseline (95% CI −0.160 to +0.029) and the re-scored merge is 0.012 above
   v1 (−0.052 to +0.077). Gold lost at the merge is 21 of 90 for v1 and 19
-  with the re-score, where run 1 had 29 and 16. On the 18-question strict
-  subset v1 is nominally above the baseline (0.670 against 0.611; +0.059,
-  −0.108 to +0.216). Those labels cover 1.3 of the 8 papers in a context, so
+  with the re-score, where run 1 had 29 and 16. On the 16-question strict
+  subset v1 is nominally above the baseline (0.726 against 0.698; +0.028,
+  −0.156 to +0.233). Those labels cover 1.3 of the 8 papers in a context, so
   the full-text regression rests on the extension labels and on the sample
   of 30 that checks them.
 - **v2 matches the baseline.** Recall differs by +0.001 (−0.019 to +0.018)
@@ -212,7 +225,7 @@ grades are untouched.
   is close to searching once.
 - **Four sub-queries do not beat one.** `agentic_rerank_orig` is 0.015 above
   v2 on the extended set (−0.023 to +0.051) and 0.031 above it on the strict
-  version (−0.015 to +0.074). Neither interval excludes zero.
+  version (−0.015 to +0.075). Neither interval excludes zero.
 - **Reflection still shows no benefit.** The one run without it scored 0.373,
   above all three of v1's runs (0.293 to 0.369). That is no sign that the
   follow-up search helps, and one run cannot show that it hurts. The critic
@@ -291,9 +304,9 @@ the answer's rerank pairs and rerank seconds.
 | Recall vs agentic_v2 (95% CI) | Curated | Extended |
 |---|---|---|
 | Keep 10, lenient | −0.039 (−0.120 to +0.042) | −0.011 (−0.053 to +0.030) |
-| Keep 10, strict | +0.037 (−0.056 to +0.139) | +0.003 (−0.046 to +0.059) |
+| Keep 10, strict | +0.031 (−0.083 to +0.156) | +0.005 (−0.045 to +0.061) |
 | Keep 20, lenient | −0.030 (−0.081 to +0.017) | −0.004 (−0.029 to +0.021) |
-| Keep 20, strict | −0.046 (−0.194 to +0.074) | +0.000 (−0.028 to +0.027) |
+| Keep 20, strict | −0.052 (−0.219 to +0.083) | +0.001 (−0.028 to +0.029) |
 
 The keep-20 rows were run the next morning (`agentic_v2_single_rerank_20`,
 added to the same three result files), so its latency is from a different
@@ -329,9 +342,9 @@ the archived files with the third command at the top.
 
 | Config | Recall@10 | Recall@10, strict gold | MRR | p50 latency | Cost / query |
 |---|---|---|---|---|---|
-| hybrid_reranked (baseline, no LLM in retrieval) | 0.652 | 0.750 | 0.658 | 6.6 s | $0.00026 |
-| agentic v1 (original loop) | 0.449 | 0.611 | 0.439 | 26.1 s | $0.00074 |
-| agentic_v2 (fixes below) | 0.657 | 0.769 | 0.661 | 16.9 s | $0.00064 |
+| hybrid_reranked (baseline, no LLM in retrieval) | 0.652 | 0.844 | 0.658 | 6.6 s | $0.00026 |
+| agentic v1 (original loop) | 0.449 | 0.573 | 0.439 | 26.1 s | $0.00074 |
+| agentic_v2 (fixes below) | 0.657 | 0.865 | 0.661 | 16.9 s | $0.00064 |
 
 1. **v1 was a regression.** Recall fell by 0.20 (95% CI −0.33 to −0.08). It
    was worse than the baseline on 16 of 33 questions and better on 5, at
@@ -348,8 +361,9 @@ Gold papers were picked by an LLM judge from a pooled candidate set: the top
 15 papers from BM25 plus the top 15 from dense retrieval, shuffled
 (`scripts/curate_gold.py`). That gave 90 labels over 33 questions.
 
-I then read 28 of those labels across 10 questions. None were irrelevant, but
-only 14 directly answered the question. The other 14 were on topic without
+A model (Claude Opus 5.5) then reviewed 28 of those labels across 10
+questions, with the judge's reasons visible. It found none
+irrelevant, but only 14 that directly answered the question. The other 14 were on topic without
 containing the answer, for example a cost-effectiveness paper that mentions a
 trial result in passing. Ten of those 14 weak labels came from the dense-only
 part of the pool.
@@ -359,15 +373,16 @@ So the tables report two sets:
 | Gold set | Definition | Size |
 |---|---|---|
 | Lenient | every curated label | 33 questions, 90 papers |
-| Strict | graded "directly answers" | 18 questions, 34 papers |
+| Strict | graded "directly answers" | 16 questions, 28 papers |
 
 The strict grades come from a second, zero-shot judge that reads the full
-abstract and never sees my verdicts (`scripts/grade_gold.py`). On the 28
-labels I reviewed it agreed with me on 22 (Cohen's κ = 0.57). All six
-disagreements went one way: I said "direct" and the judge said "related". The
-strict set is therefore conservative, and my grade overrides the judge
-wherever both exist. Fifteen questions have no strict gold paper and drop out
-of the strict column.
+abstract and never sees the review's verdicts (`scripts/grade_gold.py`). On
+the 28 labels reviewed it agreed with the review on 22 (Cohen's κ = 0.57).
+All six disagreements went one way: the review said "direct" and the judge
+said "related". The judge's grade stands in all six, because one model's
+review does not override another model's grades, so the strict set may be
+conservative. Seventeen questions have no strict gold paper and drop out of
+the strict column.
 
 Recall differences are reported with a paired bootstrap 95% confidence
 interval over questions. With 33 questions, most differences between
@@ -448,7 +463,7 @@ user's question verbatim raises the surfaced count to 75, and the final count
 v2 combines the three knobs. In practice the planner returns one keyword
 restatement, which is searched alongside the verbatim question, and the merged
 pool is reranked against the question. Recall matches `agentic_faithful`; MRR
-is higher (0.661 against 0.635, and 0.717 against 0.602 on strict gold),
+is higher (0.661 against 0.635, and 0.744 against 0.615 on strict gold),
 because ranking against the user's natural-language question works better than
 ranking against the planner's keyword version of it.
 
@@ -456,19 +471,19 @@ ranking against the planner's keyword version of it.
 
 | Config | Recall@10 | Strict recall@10 | MRR | Strict MRR | p50 latency |
 |---|---|---|---|---|---|
-| bm25_only | 0.490 | 0.620 | 0.408 | 0.405 | 1.2 s |
-| dense_only | 0.586 | 0.546 | 0.592 | 0.419 | 1.9 s |
-| hybrid_rrf | 0.601 | 0.722 | 0.521 | 0.431 | 1.5 s |
-| hybrid_reranked | 0.652 | 0.750 | 0.658 | 0.723 | 6.6 s |
+| bm25_only | 0.490 | 0.521 | 0.408 | 0.361 | 1.2 s |
+| dense_only | 0.586 | 0.604 | 0.592 | 0.408 | 1.9 s |
+| hybrid_rrf | 0.601 | 0.781 | 0.521 | 0.410 | 1.5 s |
+| hybrid_reranked | 0.652 | 0.844 | 0.658 | 0.751 | 6.6 s |
 
 - **Hybrid beats either retriever alone under both gold sets.** That is the
   robust result.
-- **BM25 against dense is not robust.** Dense wins on lenient gold and BM25
-  wins on strict gold, which is what the spot-check predicts: the dense pool
-  contributed most of the on-topic-but-not-answering labels. I make no claim
-  either way.
-- **The reranker's value is ordering, not coverage.** It adds 0.03 to 0.05
-  recall, inside the noise, and lifts strict MRR from 0.431 to 0.723. It also
+- **BM25 against dense is not settled.** Dense is ahead under both gold sets
+  (0.586 against 0.490 lenient, 0.604 against 0.521 strict), but neither gap
+  is significant (−0.096, −0.212 to +0.025; −0.083, −0.396 to +0.229). I make
+  no claim either way.
+- **The reranker's value is ordering, not coverage.** It adds 0.05 to 0.06
+  recall, inside the noise, and lifts strict MRR from 0.410 to 0.751. It also
   accounts for about 5 seconds of latency on a laptop GPU.
 
 ### Faithfulness
@@ -496,9 +511,10 @@ is worse" instead of "the merge step compares scores that are not comparable".
 1. **Route instead of always looping.** v2 adds one restatement of the
    question and gets baseline retrieval for 2.5× the latency. When the planner
    has nothing to split, run the single-shot path and skip reflection.
-2. **Hand-check the judge's "related" grades.** The sample of 30 covered the
-   papers it graded direct, and 27 held. The 880 it graded related are
-   unchecked, and each one that does answer its question is scored as a miss.
+2. **Have a person review the judge's grades, including "related".** The
+   second-model review of 30 covered only the papers graded direct, and 26
+   held. The 883 graded related have not been reviewed, and each one that
+   does answer its question is scored as a miss.
 3. **Judge passages, not papers.** A config is credited for a paper whichever
    of its chunks it retrieved. The traces now record the chunk IDs of every
    answer's context, so the judge could grade those chunks directly.
@@ -514,16 +530,21 @@ is worse" instead of "the merge step compares scores that are not comparable".
 - Three runs for three agentic configs, one for the other three. The
   single-shot configs retrieve deterministically.
 - Gold labels are LLM-curated, and the curating judge saw only the first 500
-  characters of each abstract. The human check covers 28 of the 90 original
-  labels and a sample of 30 of the 336 the extension judge graded direct.
+  characters of each abstract. A model review (Claude Opus 5.5, not
+  blind to the judge) covers 28 of the 90 original labels. When the
+  extension judge first ran, that review still overrode the judge, so the six
+  labels it had raised to "direct" were skipped. Once the judge's grades were
+  restored, the extension judge read those six on full text: 3 direct, 3
+  related. The same model reviewed a sample of 30 of the 336 papers then
+  graded direct, and 40 test-split labels.
 - The extension judge saw a paper's abstract and its two best-matching body
   passages, not the whole body, so "related" can mean the answer is in a
   passage it was not shown.
 - Recall is scored on papers. A config is credited for a paper whichever of
   its chunks was retrieved, including one that does not hold the answer.
-- The strict set of run 1 has 18 questions, so its intervals are wide. v1's
-  strict recall deficit there (−0.139, 95% CI −0.333 to +0.074) does not
-  reach significance on its own; its MRR falls from 0.723 to 0.460.
+- The strict set of run 1 has 16 questions, so its intervals are wide. Even
+  so, v1's strict recall deficit there is significant on its own (−0.271,
+  95% CI −0.490 to −0.062), and its MRR falls from 0.751 to 0.493.
 - Latency includes network time and was measured on an Apple Silicon laptop
   with the reranker on the GPU.
 - An earlier version of the run 1 analysis (see git history) used a

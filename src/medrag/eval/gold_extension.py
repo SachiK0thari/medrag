@@ -9,9 +9,9 @@ pool), judged by it and not picked, and picked as gold but graded only
 best-matching body passages. The gold labels in `gold_pmids.py` and the
 grades in `gold_grades.py` are unchanged.
 
-`HUMAN_CHECK` is a hand-check of a random sample of the papers graded 2
-(empty when no hand-check has been saved). It is kept for comparison:
-`EXTENSION_GRADES` holds the judge's grades whatever the hand-check says.
+`REVIEW_CHECK` is a second review of a random sample of the papers graded 2
+(empty when none has been saved). It is kept for comparison:
+`EXTENSION_GRADES` holds the judge's grades whatever the review says.
 """
 
 from __future__ import annotations
@@ -994,6 +994,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41255131": 1,
         "41259721": 1,
         "41266905": 1,
+        "41286734": 2,
         "41301492": 1,
         "41323510": 1,
         "41355396": 2,
@@ -1012,6 +1013,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41808780": 1,
         "41848820": 1,
         "41870800": 2,
+        "41907546": 1,
         "41908557": 1,
     },
     "q02": {
@@ -1103,6 +1105,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41010881": 1,
         "41053738": 1,
         "41065947": 2,
+        "41146812": 2,
         "41192940": 1,
         "41201574": 1,
         "41230897": 2,
@@ -1240,6 +1243,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41710707": 1,
         "41745389": 2,
         "41800749": 1,
+        "41808780": 1,
         "41817629": 1,
         "41848820": 2,
         "41870800": 2,
@@ -1573,6 +1577,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41388533": 1,
         "41399474": 1,
         "41496949": 1,
+        "41501059": 2,
         "41644273": 2,
         "41647111": 1,
         "41717504": 2,
@@ -1716,6 +1721,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
         "41682651": 0,
         "41697578": 1,
         "41715239": 2,
+        "41761267": 1,
         "41808780": 1,
         "41828377": 2,
         "41870800": 1,
@@ -2467,7 +2473,7 @@ EXTENSION_GRADES: dict[str, dict[str, int]] = {
     },
 }
 
-HUMAN_CHECK: dict[str, dict[str, int]] = {
+REVIEW_CHECK: dict[str, dict[str, int]] = {
     "q01": {"41053738": 2, "41095837": 2, "41095961": 2, "41209959": 2},
     "q02": {"40637950": 2},
     "q03": {"40637950": 2, "41818087": 2},
@@ -2478,12 +2484,12 @@ HUMAN_CHECK: dict[str, dict[str, int]] = {
     "q09": {"41754812": 2},
     "q11": {"40825437": 2, "41401988": 2, "41710707": 2},
     "q13": {"41658748": 2, "41715239": 2},
-    "q14": {"41891334": 2},
+    "q14": {"41891334": 1},
     "q15": {"41312047": 2, "41761267": 2},
     "q19": {"40555920": 1},
     "q22": {"41259721": 2, "41907103": 2},
-    "q23": {"40976663": 2, "41604151": 1},
+    "q23": {"40976663": 2, "41604151": 2},
     "q28": {"41244817": 2, "41323510": 2},
-    "q31": {"41188987": 2},
+    "q31": {"41188987": 1},
     "q32": {"41658748": 1},
 }

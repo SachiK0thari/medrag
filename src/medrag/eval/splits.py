@@ -46,9 +46,9 @@ class SplitFiles:
     gold_extension_module: Path  # scripts/extend_gold.py
     curation_audit: Path
     grades_audit: Path
-    grades_human: Path  # hand-check of curated labels, if one was saved
+    grades_review: Path  # second review of a sample of curated labels, if saved
     extension_audit: Path
-    extension_human: Path  # hand-check of extension grades, if one was saved
+    extension_review: Path  # second review of a sample of extension grades, if saved
     results: Path  # scripts/run_eval.py; traces sit beside it
 
     def module_name(self, stem: str) -> str:
@@ -65,9 +65,9 @@ def split_files(split: Split, data_dir: Path) -> SplitFiles:
         gold_extension_module=_EVAL_PKG / f"gold_extension{s}.py",
         curation_audit=data_dir / f"gold_curation_audit{s}.json",
         grades_audit=data_dir / f"gold_grades_audit{s}.json",
-        grades_human=data_dir / f"gold_spotcheck_verdicts{s}.json",
+        grades_review=data_dir / f"gold_spotcheck_verdicts{s}.json",
         extension_audit=data_dir / f"gold_extension_audit{s}.json",
-        extension_human=data_dir / f"gold_extension_spotcheck_verdicts{s}.json",
+        extension_review=data_dir / f"gold_extension_spotcheck_verdicts{s}.json",
         results=data_dir / f"eval_results{s}.csv",
     )
 
