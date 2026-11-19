@@ -1,0 +1,34 @@
+name: keep-space-awake
+
+# A free Hugging Face Space sleeps after about 48 hours without visitors, and
+# the first visitor then waits through a cold boot. Load the demo page once a
+# day so it stays up. This only opens the page: it asks no question, so it
+# spends no LLM tokens, reranker quota or rate-limit slot.
+
+on:
+  schedule:
+    - cron: "17 9 * * *" # daily, 09:17 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Visit the Space and wait until it is running
+        env:
+          API: https://huggingface.co/api/spaces/SachiK/medrag
+          APP: https://sachik-medrag.hf.space/
+        run: |
+          stage() { curl -fsS "$API" | jq -r '.runtime.stage'; }
+          echo "stage before: $(stage)"
+          curl -fsS -o /dev/null -L "$APP" || true
+          for i in $(seq 1 40); do
+            s=$(stage)
+            if [ "$s" = RUNNING ]; then echo "running after ~$((i * 10)) s"; exit 0; fi
+            echo "$s"; sleep 10
+          done
+          echo "::error::Space is still $s after about 7 minutes"
+          exit 1
