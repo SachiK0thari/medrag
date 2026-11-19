@@ -25,7 +25,16 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 [![ruff](https://img.shields.io/badge/lint-ruff-orange)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/types-mypy%20strict-blue)](https://mypy-lang.org)
 
-**Live demo:** [huggingface.co/spaces/SachiK/medrag](https://huggingface.co/spaces/SachiK/medrag)
+**TL;DR**
+- **What:** cited answers from 498 GLP-1 cardiovascular papers, using BM25 + dense
+  search, a cross-encoder reranker and an LLM agent that plans sub-queries.
+- **Result:** the first agent cut recall by 0.20 (95% CI −0.33 to −0.08, on
+  abstracts). Its saved traces showed why: it merged reranker scores computed
+  against different queries. Fixed, it matches the pipeline it wraps on the
+  full-text corpus (+0.001 recall, CI −0.019 to +0.018) at 2.5× the latency.
+- **Try it:** [live demo](https://huggingface.co/spaces/SachiK/medrag) on a free
+  Hugging Face Space. If nobody has used it for a while, the first load takes
+  about a minute while it wakes up.
 
 ![A question about the SELECT trial is typed into the MedRAG app. After a short wait the app shows a cited answer, the latency, and the list of source papers, and the first source is opened to show its PMID and the quoted passage.](docs/demo.gif)
 
