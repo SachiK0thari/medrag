@@ -14,10 +14,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+# Install exactly what uv.lock pins, as CI and `make install` do. The
+# dependencies go in their own layer so a code change does not reinstall them.
+COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /bin/uv
+ENV UV_COMPILE_BYTECODE=0 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_NO_CACHE=1 \
+    PATH="/app/.venv/bin:$PATH"
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project
 COPY src ./src
-
-RUN pip install --upgrade pip && pip install -e .
+RUN uv sync --frozen
 
 # Pre-download embedding + reranker models so first request isn't a cold start
 RUN python -c "\
