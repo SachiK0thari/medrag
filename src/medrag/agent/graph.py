@@ -21,6 +21,10 @@ values explicitly so the benchmark keeps a true "before" row. See
   the merged pool by per-sub-query rerank scores, which are not comparable
   across sub-queries, so chunks matching a tangential sub-query could outrank
   chunks matching the actual question.
+- ``single_rerank``: with ``rerank_against_original``, skip the per-sub-query
+  rerank and cut each sub-query's fused list by RRF rank instead, so every
+  chunk goes through the cross-encoder once (in the pool rerank) rather than
+  twice. An experiment; off by default.
 - ``max_reflection_loops``: override the settings value (0 disables reflect).
 - ``faithful_decomposition``: use the v2 planner prompt that keeps named
   entities verbatim and returns a single sub-query for atomic questions.
@@ -280,6 +284,7 @@ class MedRagAgent:
         rerank_against_original: bool = True,
         max_reflection_loops: int | None = None,
         faithful_decomposition: bool = True,
+        single_rerank: bool = False,
     ) -> None:
         self._settings = get_settings()
         self._store = store
@@ -288,6 +293,9 @@ class MedRagAgent:
         self._graph: CompiledStateGraph | None = None
         self._keep_original_query = keep_original_query
         self._rerank_against_original = rerank_against_original
+        # Only meaningful with the pool rerank: without it the per-sub-query
+        # scores are the only ranking there is.
+        self._single_rerank = single_rerank and rerank_against_original
         self._max_reflection_loops = (
             max_reflection_loops
             if max_reflection_loops is not None
@@ -362,10 +370,14 @@ class MedRagAgent:
             if not fused:
                 trace.append({"step": "retrieve", "sub_query": sq.text, "top_pmids": []})
                 continue
-            started = time.perf_counter()
-            reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
-            _spent(timings, "rerank", started)
-            pairs += len(fused)
+            if self._single_rerank:
+                # The pool rerank below scores these against the question.
+                reranked = fused[: self._settings.rerank_top_k]
+            else:
+                started = time.perf_counter()
+                reranked = reranker.rerank(sq.text, fused, self._settings.rerank_top_k)
+                _spent(timings, "rerank", started)
+                pairs += len(fused)
             new_chunks.extend(reranked)
             trace.append(
                 {
@@ -390,7 +402,12 @@ class MedRagAgent:
                 "step": "merge",
                 "n_chunks": len(merged),
                 "rerank_against_original": self._rerank_against_original,
+                "single_rerank": self._single_rerank,
                 "top_pmids": _unique_pmids(merged),
+                # Running totals for the whole answer so far, so the last
+                # merge entry holds the answer's reranker cost.
+                "rerank_pairs": pairs,
+                "rerank_s": round(timings.get("rerank", 0.0), 3),
             }
         )
         return {

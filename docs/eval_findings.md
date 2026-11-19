@@ -272,6 +272,38 @@ differences between configs.
   input tokens. Cost differences of that size are OpenRouter's billing, not
   the method.
 
+### Reranking each chunk once
+
+v2 reranks each sub-query's fused list (up to 60 candidates) against the
+sub-query, keeps the top 10, then reranks the merged pool against the
+original question. `agentic_v2_single_rerank` keeps each sub-query's top 10
+by RRF rank and runs only the pool rerank. Both were run three times in the
+same sessions (`data/eval_results_single_rerank{,_rep2,_rep3}.csv`), with the
+local cross-encoder on an M1 Pro. The merge step of each trace now records
+the answer's rerank pairs and rerank seconds.
+
+| 33 questions, 3 runs | Pairs, mean (median) | Rerank s | p50 | p95 | Recall, each run |
+|---|---|---|---|---|---|
+| agentic_v2 | 84 (75) | 12.5 | 13.6 s | 31.8 s | 0.485, 0.505, 0.495 |
+| agentic_v2_single_rerank | 19 (16) | 3.4 | 6.2 s | 13.6 s | 0.449, 0.460, 0.460 |
+
+| Recall vs agentic_v2 (95% CI) | Curated | Extended |
+|---|---|---|
+| Lenient | −0.039 (−0.120 to +0.042) | −0.011 (−0.053 to +0.030) |
+| Strict | +0.037 (−0.056 to +0.139) | +0.003 (−0.046 to +0.059) |
+
+- Pairs fall by 77%, not by half: the first pass scores every fused
+  candidate, not just the 10 it keeps, so it accounts for most of the work.
+- Single rerank is behind on curated lenient recall in every run, but the
+  gap is inside the run-to-run and question-sampling noise, and it vanishes
+  on the extended labels. The likely cost is papers that sit below 10th by
+  RRF for a sub-query but would have been reranked into its top 10.
+- Faithfulness is unchanged (0.974 against 0.965), as are words and
+  citations per answer.
+- Not shipped: it was measured on the development set only. A natural next
+  variant keeps more candidates per sub-query (say 20) before the single
+  rerank, which would buy some recall back for some of the saved time.
+
 ## Run 1: the abstracts-only corpus
 
 This is the analysis that found the regression, as written at the time. The

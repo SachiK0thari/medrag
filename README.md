@@ -145,6 +145,33 @@ papers each, 7 against 12, so the two sets' absolute numbers are not
 comparable; the gap to the baseline is. Reproduce it with
 `python scripts/analyze_eval.py --split test`.
 
+### Reranking each chunk once
+
+v2 reranks twice. Each sub-query's fused candidates are scored against that
+sub-query, cut to 10, and then the merged pool is scored again against the
+user's question. Most chunks go through the cross-encoder twice, and the
+first pass decides only which 10 survive. The experiment cuts each
+sub-query's list by fusion rank instead and reranks only the pool
+(`agentic_v2_single_rerank`). Three runs of each, side by side, on the 33
+development questions:
+
+| Development set, 3 runs | Rerank pairs per answer | Rerank time | p50 latency | p95 latency | Recall@10 | vs v2 (95% CI) |
+|---|---|---|---|---|---|---|
+| **Agentic v2** | 84 | 12.5 s | 13.6 s | 31.8 s | 0.495 | — |
+| Single rerank | 19 | 3.4 s | 6.2 s | 13.6 s | 0.456 | −0.039 (−0.120 to +0.042) |
+
+The cross-encoder does a quarter of the work and the median answer takes
+under half as long. Recall on the curated labels is nominally lower in all
+three runs (0.449 to 0.460 against 0.485 to 0.505), with an interval that
+includes zero. Against the larger extended label set the two are level
+(−0.011, −0.053 to +0.030), and on the strict labels single rerank is ahead
+(+0.037, −0.056 to +0.139). v2 stays the default: this is a development-set
+result, so switching would first need the test split to agree. On the live
+demo, which uses Pinecone's hosted reranker, it would also cut rerank
+requests from about three per question to about one, roughly tripling what the monthly
+quota covers. Reproduce it with
+`python scripts/analyze_eval.py --results data/eval_results_single_rerank.csv --baseline agentic_v2 --diff agentic_v2_single_rerank`.
+
 ### What full text did for the answers
 
 | Agentic v2, 33 questions | Abstracts only | Full text |

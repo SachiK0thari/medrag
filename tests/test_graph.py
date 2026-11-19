@@ -400,6 +400,46 @@ def test_rerank_against_original_rescores_merged_pool(scripted_llm):
     assert merge["rerank_against_original"] is True
 
 
+def test_merge_trace_records_rerank_pairs(scripted_llm):
+    scripted_llm(decompose='[{"text": "sq1"}, {"text": "sq2"}]')
+    hybrid = FakeHybrid({"sq1": [_rc("11"), _rc("12")], "sq2": [_rc("21")]})
+    _, _, trace = _agent(hybrid, FakeReranker(), rerank_against_original=True).run_with_trace("Q?")
+    merge = next(e for e in trace if e["step"] == "merge")
+    assert merge["rerank_pairs"] == 6
+    assert merge["single_rerank"] is False
+    assert merge["rerank_s"] >= 0
+
+
+def test_single_rerank_scores_each_chunk_once_against_the_question(
+    scripted_llm, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(graph_mod.get_settings(), "rerank_top_k", 2)
+    scripted_llm(decompose='[{"text": "sq1"}, {"text": "sq2"}]')
+    # sq1 has three candidates in RRF order; only the top two by RRF are kept.
+    hybrid = FakeHybrid({"sq1": [_rc("11"), _rc("12"), _rc("13")], "sq2": [_rc("21"), _rc("11")]})
+    reranker = FakeReranker()
+    agent = _agent(hybrid, reranker, rerank_against_original=True, single_rerank=True)
+
+    retrieved, _, trace = agent.run_with_trace("Q?")
+
+    # One reranker call, over the deduped pool, against the user's question.
+    assert reranker.calls == [("Q?", 3)]
+    assert {rc.paper.pmid for rc in retrieved} == {"11", "12", "21"}
+    merge = next(e for e in trace if e["step"] == "merge")
+    assert merge["single_rerank"] is True
+    assert merge["rerank_pairs"] == 3
+
+
+def test_single_rerank_needs_the_pool_rerank(scripted_llm):
+    """Without the pool rerank there would be no reranking at all, so it is ignored."""
+    scripted_llm()
+    hybrid = FakeHybrid({"sq1": [_rc("1"), _rc("2")]})
+    reranker = FakeReranker()
+    _, _, trace = _agent(hybrid, reranker, single_rerank=True).run_with_trace("Q?")
+    assert reranker.calls == [("sq1", 2)]
+    assert next(e for e in trace if e["step"] == "merge")["single_rerank"] is False
+
+
 def test_faithful_decomposition_uses_v2_prompt(scripted_llm, monkeypatch):
     seen: list[str] = []
     real = ScriptedLLM()
