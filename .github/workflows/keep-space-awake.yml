@@ -1,48 +1,19 @@
 name: keep-space-awake
 
 # A free Hugging Face Space sleeps after about 48 hours without visitors, and
-# the first visitor then waits through a cold boot. Load the demo page about
-# every 40 hours, inside that window but no more often than needed. This only
-# opens the page: it asks no question, so it spends no LLM tokens, reranker
-# quota or rate-limit slot.
-#
-# Cron has no 40-hour interval, so the schedule fires every 8 hours (00:00,
-# 08:00, 16:00 UTC) and the `due` job lets one firing in five through, which
-# makes the visits exactly 40 hours apart. A manual run always visits. The
-# `due` job takes a few seconds; the visits it skips show as skipped in the
-# Actions tab.
+# the first visitor then waits through a cold boot. Load the demo page once a
+# day so it stays up. This only opens the page: it asks no question, so it
+# spends no LLM tokens, reranker quota or rate-limit slot.
 
 on:
   schedule:
-    - cron: "0 */8 * * *"
+    - cron: "17 9 * * *" # daily, 09:17 UTC
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  due:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      visit: ${{ steps.check.outputs.visit }}
-    steps:
-      - id: check
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          # Count 8-hour slots since the epoch rather than hours, so a run that
-          # GitHub starts late (it often does) still lands in its own slot.
-          slot=$(( $(date -u +%s) / 28800 ))
-          if [ "$EVENT" != schedule ] || [ $((slot % 5)) -eq 0 ]; then
-            echo "visit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "visit=false" >> "$GITHUB_OUTPUT"
-            echo "not due: next visit in $(( (5 - slot % 5) * 8 )) h"
-          fi
-
   visit:
-    needs: due
-    if: needs.due.outputs.visit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
