@@ -123,5 +123,7 @@ if st.button("Search", type="primary", disabled=not question):
     with col_meta:
         st.metric("Latency", f"{latency_s:.2f}s")
         st.metric("Sources cited", len(answer.citations))
+        if answer.route:
+            st.metric("Route", answer.route.capitalize())
         st.metric("Sub-queries", len(answer.sub_queries))
         st.metric("Chunks considered", answer.total_chunks_considered)

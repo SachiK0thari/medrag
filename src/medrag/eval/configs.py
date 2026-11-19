@@ -19,8 +19,9 @@ loads the corpus and the cross-encoder once.
 Agentic ablations: `agentic` is the original v1 loop, reproduced by passing
 the legacy knob values explicitly (`MedRagAgent`'s own defaults are v2). Each
 `agentic_*` variant flips exactly one knob relative to v1 so the eval table
-isolates the effect of that change; `agentic_v2` is the combination that
-ships as the default in the API and UI.
+isolates the effect of that change. `agentic_v2` combines the fixes, and
+`agentic_v2_routed`, which ships as the default in the API and UI, adds
+`route_atomic`: questions the planner does not split skip the loop.
 """
 
 from __future__ import annotations
@@ -70,7 +71,9 @@ class _SharedComponents:
         self._dense: DenseRetriever | None = None
         self._hybrid: HybridRetriever | None = None
         self._reranker: Reranker | None = None
-        self._agents: dict[tuple[bool, bool, int | None, bool, bool, int | None], MedRagAgent] = {}
+        self._agents: dict[
+            tuple[bool, bool, int | None, bool, bool, int | None, bool], MedRagAgent
+        ] = {}
 
     def store(self) -> Store:
         if self._store is None:
@@ -106,6 +109,7 @@ class _SharedComponents:
         faithful_decomposition: bool = False,
         single_rerank: bool = False,
         single_rerank_keep: int | None = None,
+        route_atomic: bool = False,
     ) -> MedRagAgent:
         """One agent per knob combination, all sharing the retrieval stack."""
         key = (
@@ -115,6 +119,7 @@ class _SharedComponents:
             faithful_decomposition,
             single_rerank,
             single_rerank_keep,
+            route_atomic,
         )
         if key not in self._agents:
             self._agents[key] = MedRagAgent(
@@ -127,6 +132,7 @@ class _SharedComponents:
                 faithful_decomposition=faithful_decomposition,
                 single_rerank=single_rerank,
                 single_rerank_keep=single_rerank_keep,
+                route_atomic=route_atomic,
             )
         return self._agents[key]
 
@@ -201,6 +207,7 @@ class AgenticConfig:
         faithful_decomposition: bool = False,
         single_rerank: bool = False,
         single_rerank_keep: int | None = None,
+        route_atomic: bool = False,
     ) -> None:
         self.name = name
         self._c = components
@@ -210,6 +217,7 @@ class AgenticConfig:
         self._faithful_decomposition = faithful_decomposition
         self._single_rerank = single_rerank
         self._single_rerank_keep = single_rerank_keep
+        self._route_atomic = route_atomic
 
     def agent(self) -> MedRagAgent:
         return self._c.agent(
@@ -219,6 +227,7 @@ class AgenticConfig:
             faithful_decomposition=self._faithful_decomposition,
             single_rerank=self._single_rerank,
             single_rerank_keep=self._single_rerank_keep,
+            route_atomic=self._route_atomic,
         )
 
     def run(self, question: str) -> EvalResult:
@@ -241,7 +250,7 @@ def build_all_configs() -> list[EvalConfig]:
         AgenticConfig(components, name="agentic_rerank_orig", rerank_against_original=True),
         AgenticConfig(components, name="agentic_no_reflect", max_reflection_loops=0),
         AgenticConfig(components, name="agentic_faithful", faithful_decomposition=True),
-        # Shipping candidate.
+        # All the v2 fixes, with the loop on every question.
         AgenticConfig(
             components,
             name="agentic_v2",
@@ -267,6 +276,15 @@ def build_all_configs() -> list[EvalConfig]:
             faithful_decomposition=True,
             single_rerank=True,
             single_rerank_keep=20,
+        ),
+        # Shipping config: v2 that sends atomic questions down the single-shot path.
+        AgenticConfig(
+            components,
+            name="agentic_v2_routed",
+            keep_original_query=True,
+            rerank_against_original=True,
+            faithful_decomposition=True,
+            route_atomic=True,
         ),
     ]
     return configs

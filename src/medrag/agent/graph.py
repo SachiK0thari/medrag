@@ -3,15 +3,20 @@
 State machine:
     decompose -> retrieve -> reflect -> (retrieve | answer) -> end
 
+With ``route_atomic`` the graph has a second route: a question the planner
+does not split goes decompose -> retrieve -> answer, which is the
+``hybrid_reranked`` single-shot pipeline plus one planner call.
+
 `retrieve` only runs the sub-queries that haven't been executed yet, so the
 reflect node can append a follow-up sub-query and loop without re-running
 anything. Accumulated `RetrievedChunk`s are deduped by chunk_id and kept in
 rerank-score order so the answer node can slice the top-N directly.
 
-Loop behaviour is controlled by four knobs. The defaults are the v2 loop
-that the API and UI ship; the ``agentic`` eval config passes the legacy v1
-values explicitly so the benchmark keeps a true "before" row. See
-``docs/eval_findings.md`` for the ablation that motivated each default.
+Loop behaviour is controlled by these knobs. The defaults are the v2 loop
+with the router, which the API and UI ship; the ``agentic`` eval config
+passes the legacy v1 values explicitly so the benchmark keeps a true
+"before" row. See ``docs/eval_findings.md`` for the ablation that motivated
+each default.
 
 - ``keep_original_query``: always search the user's question verbatim as the
   first sub-query. v1 only searched the LLM's paraphrased sub-queries, which
@@ -29,6 +34,12 @@ values explicitly so the benchmark keeps a true "before" row. See
 - ``max_reflection_loops``: override the settings value (0 disables reflect).
 - ``faithful_decomposition``: use the v2 planner prompt that keeps named
   entities verbatim and returns a single sub-query for atomic questions.
+- ``route_atomic``: when the planner returns exactly one sub-query (before
+  ``keep_original_query`` adds the question), search the question alone,
+  rerank once, and skip the pool rerank and reflection. On the eval questions
+  the loop matched single-shot recall at 2.5x the latency, and almost every
+  question was atomic. On by default: over three dev runs it matched v2's
+  recall with p50 latency 14.0 -> 6.5 s.
 
 Every run records a per-sub-query ``trace`` (which PMIDs each sub-query
 surfaced) so regressions can be attributed to a specific planner output, and
@@ -92,6 +103,8 @@ class AgentState(TypedDict, total=False):
     # number of (query, chunk) pairs the cross-encoder scored.
     timings: dict[str, float]
     rerank_pairs: int
+    # True when `route_atomic` sent an atomic question down the single-shot path.
+    routed: bool
 
 
 # --------------------------------------------------------------------------- #
@@ -287,6 +300,7 @@ class MedRagAgent:
         faithful_decomposition: bool = True,
         single_rerank: bool = False,
         single_rerank_keep: int | None = None,
+        route_atomic: bool = True,
     ) -> None:
         self._settings = get_settings()
         self._store = store
@@ -299,6 +313,7 @@ class MedRagAgent:
         # scores are the only ranking there is.
         self._single_rerank = single_rerank and rerank_against_original
         self._single_rerank_keep = single_rerank_keep or self._settings.rerank_top_k
+        self._route_atomic = route_atomic
         self._max_reflection_loops = (
             max_reflection_loops
             if max_reflection_loops is not None
@@ -339,7 +354,14 @@ class MedRagAgent:
         resp = llm.complete(self._decompose_system, question)
         _spent(timings, "llm", started)
         sub_queries = _parse_sub_queries(resp.text, fallback=question, limit=limit)
-        if self._keep_original_query:
+        # Route on the planner's own output, before the question is merged in:
+        # one sub-query (a restatement, or the parse-failure fallback) means
+        # there was nothing to split.
+        planner_n = len(sub_queries)
+        routed = self._route_atomic and planner_n == 1
+        if routed:
+            sub_queries = [SubQuery(text=question, rationale="atomic question, single-shot route")]
+        elif self._keep_original_query:
             original = SubQuery(text=question, rationale="original question, searched verbatim")
             rest = [sq for sq in sub_queries if sq.text.strip().lower() != question.strip().lower()]
             sub_queries = [original, *rest][:limit]
@@ -350,9 +372,11 @@ class MedRagAgent:
                 if self._decompose_system is DECOMPOSE_SYSTEM_FAITHFUL
                 else "v1",
                 "sub_queries": [sq.text for sq in sub_queries],
+                "planner_n": planner_n,
+                "routed": routed,
             }
         ]
-        return {"sub_queries": sub_queries, "trace": trace, "timings": timings}
+        return {"sub_queries": sub_queries, "trace": trace, "timings": timings, "routed": routed}
 
     def _retrieve_node(self, state: AgentState) -> AgentState:
         timings = dict(state.get("timings", {}))
@@ -364,6 +388,7 @@ class MedRagAgent:
         already = state.get("n_retrieval_calls", 0)
         pending = state["sub_queries"][already:]
 
+        routed = state.get("routed", False)
         trace = list(state.get("trace", []))
         new_chunks: list[RetrievedChunk] = []
         for sq in pending:
@@ -373,7 +398,7 @@ class MedRagAgent:
             if not fused:
                 trace.append({"step": "retrieve", "sub_query": sq.text, "top_pmids": []})
                 continue
-            if self._single_rerank:
+            if self._single_rerank and not routed:
                 # The pool rerank below scores these against the question.
                 reranked = fused[: self._single_rerank_keep]
             else:
@@ -391,7 +416,9 @@ class MedRagAgent:
             )
 
         merged = _dedupe_by_chunk_id(state.get("retrieved", []) + new_chunks)
-        if self._rerank_against_original and merged:
+        # On the routed path the one sub-query is the question, so the
+        # per-query rerank above already scored the pool against it.
+        if self._rerank_against_original and merged and not routed:
             # Re-score the whole accumulated pool against the user's question so
             # chunks from different sub-queries are ranked on a common scale.
             started = time.perf_counter()
@@ -405,7 +432,8 @@ class MedRagAgent:
                 "step": "merge",
                 "n_chunks": len(merged),
                 "rerank_against_original": self._rerank_against_original,
-                "single_rerank": self._single_rerank,
+                "single_rerank": self._single_rerank and not routed,
+                "routed": routed,
                 "top_pmids": _unique_pmids(merged),
                 # Running totals for the whole answer so far, so the last
                 # merge entry holds the answer's reranker cost.
@@ -474,7 +502,8 @@ class MedRagAgent:
             n_retrieval_calls=state.get("n_retrieval_calls", 1),
         )
         _spent(timings, "llm", started)
-        return {"answer": answer, "timings": timings}
+        route = "single-shot" if state.get("routed") else "agent loop"
+        return {"answer": answer.model_copy(update={"route": route}), "timings": timings}
 
     # ---- graph ----------------------------------------------------------- #
 
@@ -488,7 +517,11 @@ class MedRagAgent:
 
         graph.add_edge(START, "decompose")
         graph.add_edge("decompose", "retrieve")
-        graph.add_edge("retrieve", "reflect")
+        graph.add_conditional_edges(
+            "retrieve",
+            lambda s: "generate" if s.get("routed") else "reflect",
+            {"generate": "generate", "reflect": "reflect"},
+        )
         graph.add_conditional_edges(
             "reflect",
             lambda s: "followup" if s.get("needs_more") else "generate",
@@ -540,6 +573,7 @@ class MedRagAgent:
             "trace": [],
             "timings": {},
             "rerank_pairs": 0,
+            "routed": False,
         }
         started = time.perf_counter()
         final = self._get_graph().invoke(initial)

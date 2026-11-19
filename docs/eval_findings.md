@@ -45,6 +45,11 @@ kept in full in the second half. Run 2 is the system as it is now.
    recall differs by +0.001 (−0.019 to +0.018) over three runs, for 2.5× the
    latency. The agent does not beat single-shot retrieval on this question
    set.
+3b. **So v2 now routes around its own loop.** A question the planner does not
+   split is searched once and answered without the pool rerank or
+   reflection. Over three development runs: recall −0.001 against v2
+   (−0.012 to +0.011), p50 latency 14.0 s → 6.5 s, faithfulness 0.970 →
+   0.973. 97 of 99 answers took the short route. It ships.
 4. **Full text fixed the answers.** v2 answers quoting a 95% confidence
    interval went from 5 of 33 to 17, and answers saying the sources lack the
    information went from 17 of 33 to 3.
@@ -332,6 +337,71 @@ providers on none) and retry a truncated reply once.
   the test split was not spent on either; it stays reserved for confirming a
   change that does win.
 
+### Routing single-part questions
+
+**What the traces said first.** Over v2's three main runs, 97 of 99
+(question, run) pairs searched at most two queries (the question plus one
+restatement), 32 of 33 questions were atomic in every run, and reflection
+asked for more in 19 of 99. On the test split the same counts were 57 of 60,
+19 of 20 and 6 of 60.
+
+**The change.** `route_atomic` routes on the planner's own output, before
+`keep_original_query` adds the question. One sub-query (a restatement, or
+the fallback when the reply cannot be parsed) means atomic. An atomic
+question is searched verbatim alone, its fused list is reranked against the
+question once and cut to 10, and the answer is written without the pool
+rerank (it would re-score the same chunks against the same query) or
+reflection. The decompose step of the trace records `planner_n` and
+`routed`; the answer carries `route`.
+
+**The rule, written before the runs.** Adopt it if, on the development set
+over three runs, recall against v2 is within noise (interval including zero,
+point estimate ≥ −0.02 on the extended labels), p50 latency is at least 30%
+lower, and faithfulness is no more than 0.02 lower.
+
+**The runs.** `hybrid_reranked`, `agentic_v2` and `agentic_v2_routed`, three
+times each in the same sessions
+(`data/eval_results_routed{,_rep2,_rep3}.csv`), local cross-encoder on an M1
+Pro. Run 2 stopped partway when the OpenRouter key hit its monthly cap, and
+its routed config was re-run with `--keep-existing` after the reset.
+
+| 33 questions, 3 runs | Pairs | Rerank s | p50 | p95 | Faithfulness | $/query | LLM calls |
+|---|---|---|---|---|---|---|---|
+| hybrid_reranked | — | — | 5.7 s | 9.2 s | 0.960 | $0.00053 | 1.0 |
+| agentic_v2 | 82 | 12.3 | 14.0 s | 30.5 s | 0.970 | $0.00103 | 3.1 |
+| agentic_v2_routed | 32 | 4.5 | 6.5 s | 9.9 s | 0.973 | $0.00058 | 2.0 |
+
+| Routed recall (95% CI) | vs agentic_v2 | vs hybrid_reranked |
+|---|---|---|
+| Curated, lenient | +0.005 (−0.022 to +0.035) | −0.007 (−0.020 to +0.000) |
+| Curated, strict | +0.024 (−0.014 to +0.076) | −0.021 (−0.062 to +0.000) |
+| Extended, lenient | −0.001 (−0.012 to +0.011) | +0.001 (+0.000 to +0.004) |
+| Extended, strict | −0.001 (−0.013 to +0.010) | — |
+
+| Routes, every run | Answers | Curated recall | Pairs | p50 |
+|---|---|---|---|---|
+| agentic_v2_routed, single-shot | 97 | 0.507 | 30 | 6.5 s |
+| agentic_v2_routed, agent loop | 2 | 0.333 | 112 | 18.8 s |
+
+- **Passed on all three counts**, so `route_atomic=True` is now the default.
+- **The routed system is the baseline plus a planner call.** Every routed
+  answer's context equals `hybrid_reranked`'s. The only differences come
+  from q15 ("SURPASS-CVOT or related tirzepatide CV trials"), which the
+  planner split into three queries in runs 2 and 3, and where the loop
+  dropped one of the two gold papers the baseline finds. The planner call
+  costs about 0.8 s at the median and $0.00005.
+- **Latency is v2's minus the loop.** Rerank pairs fall from 82 to 32 and
+  rerank time from 12.3 s to 4.5 s, and the p95 falls from 30.5 s to 9.9 s,
+  because the slow answers were the ones reflection sent round again.
+- **Test split, one run, after the decision.** In one session
+  (`data/eval_results_test_routed.csv`): 19 of 20 questions routed;
+  extended recall 0.655 for both the routed system and the baseline (the
+  same contexts), v2 0.626; p50 6.4 s against v2's 12.9 s and the baseline's
+  5.6 s; faithfulness 0.981, 0.980 and 0.977.
+- **What it does not show.** That the agent loop is worth anything. Two of
+  99 development answers used it, which says nothing either way. The
+  multi-hop question set in the next steps is what would.
+
 ## Run 1: the abstracts-only corpus
 
 This is the analysis that found the regression, as written at the time. The
@@ -510,9 +580,8 @@ is worse" instead of "the merge step compares scores that are not comparable".
 
 ## Next steps the data points to
 
-1. **Route instead of always looping.** v2 adds one restatement of the
-   question and gets baseline retrieval for 2.5× the latency. When the planner
-   has nothing to split, run the single-shot path and skip reflection.
+1. ~~**Route instead of always looping.**~~ Done; see
+   [Routing single-part questions](#routing-single-part-questions).
 2. **Have a person review the judge's grades, including "related".** The
    second-model review of 30 covered only the papers graded direct, and 26
    held. The 883 graded related have not been reviewed, and each one that
@@ -525,7 +594,9 @@ is worse" instead of "the merge step compares scores that are not comparable".
 5. **Add multi-hop questions.** Comparative questions such as "semaglutide
    against dulaglutide for MACE" are where decomposition should earn its
    cost, and the set has almost none. Until it does, this benchmark can show
-   the agent losing and cannot show it winning.
+   the agent losing and cannot show it winning. With routing on, 97 of 99
+   development answers never reach the loop, so this is now the only way to
+   measure it.
 
 ## Caveats
 

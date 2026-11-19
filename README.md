@@ -16,7 +16,7 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
 
 > Medical affairs teams answer literature questions from field medical
 > liaisons, and each one means finding and reading the papers by hand.
-> **MedRAG returns a cited answer in about 14 seconds** (median over the 33
+> **MedRAG returns a cited answer in about 6.5 seconds** (median over the 33
 > evaluation questions) from 498 recent PubMed papers on GLP-1 receptor
 > agonists and cardiovascular outcomes, 278 of them indexed in full text.
 
@@ -32,19 +32,23 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
   abstracts). Its saved traces showed why: it merged reranker scores computed
   against different queries. Fixed, it matches the pipeline it wraps on the
   full-text corpus (+0.001 recall, CI −0.019 to +0.018) at 2.5× the latency.
+  The traces also showed the planner had nothing to split in almost every
+  question, so those now skip the loop: [same recall, p50 latency 14.0 s →
+  6.5 s](#routing-single-part-questions).
 - **Try it:** [live demo](https://huggingface.co/spaces/SachiK/medrag) on a free
   Hugging Face Space. If nobody has used it for a while, the first load takes
-  about a minute while it wakes up.
+  about a minute while it wakes up. Once it is awake, answers take a few
+  seconds: the Space reranks with Pinecone's hosted reranker, not the
+  CPU cross-encoder the 6.5 s evaluation median was measured with.
 
 ![A question about the SELECT trial is typed into the MedRAG app. After a short wait the app shows a cited answer, the latency, and the list of source papers, and the first source is opened to show its PMID and the quoted passage.](docs/demo.gif)
 
 <sub>Recorded from the app running locally (`python scripts/record_demo.py`).
 The wait is shortened in the recording; the latency shown in the app is the
-real one for that query. This one took 18 s against a 14 s median. Most of
-that time is the cross-encoder reranking on CPU; reranking each chunk once
-instead of twice
-[cuts the median to 6 s](#reranking-each-chunk-once), with recall nominally
-lower.</sub>
+real one for that query. It was recorded before
+[routing](#routing-single-part-questions) shipped: this one took 18 s against
+the full loop's 14 s median, most of it cross-encoder reranking on CPU. The
+routed median is 6.5 s.</sub>
 
 ---
 
@@ -82,7 +86,11 @@ python scripts/analyze_eval.py --results data/eval_results_abstracts.csv \
 | Hybrid + rerank (baseline) | 0.396 | — | 0.869 | 0.984 | 5.7 s | $0.00073 |
 | Agentic v1 (original loop) | 0.338 | −0.057 (−0.102 to −0.015) | 0.716 | 0.956 | 20.8 s | $0.00136 |
 | v1 + merged pool re-scored | 0.412 | +0.016 (−0.023 to +0.053) | 0.818 | 0.971 | 26.3 s | $0.00137 |
-| **Agentic v2 (ships)** | 0.397 | +0.001 (−0.019 to +0.018) | 0.875 | 0.966 | 14.1 s | $0.00128 |
+| Agentic v2 (loop on every question) | 0.397 | +0.001 (−0.019 to +0.018) | 0.875 | 0.966 | 14.1 s | $0.00128 |
+| **v2 + routing (ships)**\* | 0.397 | +0.001 (+0.000 to +0.004) | 0.869 | 0.973 | 6.5 s | $0.00058 |
+
+\* Three later runs, side by side with the baseline and v2 in the same
+sessions; see [Routing single-part questions](#routing-single-part-questions).
 
 Recall is scored on the papers behind the 10 chunks the answer is written
 from, against the curated gold labels plus the papers graded after the corpus
@@ -138,7 +146,11 @@ of them.
 | Test split, 20 questions | Recall@10 | vs baseline (95% CI) | MRR | p50 latency |
 |---|---|---|---|---|
 | Hybrid + rerank (baseline) | 0.655 | — | 0.843 | 5.6 s |
-| **Agentic v2**, 3 runs | 0.632 | −0.023 (−0.057 to +0.009) | 0.837 | 13.1 s |
+| Agentic v2, 3 runs | 0.632 | −0.023 (−0.057 to +0.009) | 0.837 | 13.1 s |
+| **v2 + routing**, 1 run\* | 0.655 | +0.000 (+0.000 to +0.000) | 0.843 | 6.4 s |
+
+\* Run once, after routing was adopted on the development set, in a session
+of its own with the baseline (0.655, 5.6 s) and v2 (0.626, 12.9 s).
 
 The development result carries over: v2 does not beat the pipeline it
 wraps. On these questions it is nominally behind, in all three runs (0.626
@@ -148,6 +160,43 @@ higher than on the development set because these questions have fewer gold
 papers each, 7 against 12, so the two sets' absolute numbers are not
 comparable; the gap to the baseline is. Reproduce it with
 `python scripts/analyze_eval.py --split test`.
+
+### Routing single-part questions
+
+The saved traces of v2's three development runs showed what its loop was
+doing: in 97 of 99 runs the planner returned the question and at most one
+restatement of it, and reflection asked for more in 19. So v2 now routes. If
+the planner returns a single sub-query, or its reply cannot be parsed, the
+agent searches the question alone, reranks once and answers, skipping the
+pool rerank and reflection (`route_atomic`, config `agentic_v2_routed`).
+Questions the planner does split take the v2 loop unchanged. The rule for
+adopting it was written before it ran: recall within noise of v2 (interval
+including zero, point estimate no worse than −0.02 on the extended labels),
+p50 latency at least 30% lower, faithfulness no more than 0.02 lower.
+
+| Development set, 3 runs | Recall@10 | vs v2 (95% CI) | Faithfulness | Rerank pairs | p50 latency | p95 latency | $/query |
+|---|---|---|---|---|---|---|---|
+| Hybrid + rerank (baseline) | 0.396 | −0.003 (−0.014 to +0.009) | 0.960 | — | 5.7 s | 9.2 s | $0.00053 |
+| Agentic v2 | 0.398 | — | 0.970 | 82 | 14.0 s | 30.5 s | $0.00103 |
+| **v2 + routing** | 0.397 | −0.001 (−0.012 to +0.011) | 0.973 | 32 | 6.5 s | 9.9 s | $0.00058 |
+
+It passed on every count, so it is the default in the API and UI. 97 of the
+99 answers took the single-shot route; the other two were the same question
+(q15, SURPASS-CVOT "or related" tirzepatide trials), which the planner split
+into three in two of the three runs. On every other question the routed
+answer's context is the baseline's, so routed recall is the baseline's to
+within that one question (+0.001, +0.000 to +0.004), and its latency is the
+baseline's plus one planner call, about 0.8 s at the median. On the test
+split, run once afterwards, 19 of 20 questions were routed and recall equals
+the baseline's exactly.
+
+Routing *matches* the baseline; it does not improve on it. What it removes is
+the loop's cost on questions that never needed the loop. It also means these
+evaluations barely exercise the loop any more: with almost no multi-part
+questions, they can show it costing time and cannot show it earning it. The
+UI shows which route each answer took. Reproduce it with
+`python scripts/analyze_eval.py --results data/eval_results_routed.csv --baseline agentic_v2 --diff agentic_v2_routed`;
+its "Routes" table splits every run's answers by route.
 
 ### Reranking each chunk once
 
@@ -220,7 +269,9 @@ MedRAG:
    Reciprocal Rank Fusion.
 3. **Reranks** the merged candidates against the original question with a
    cross-encoder (bge-reranker-v2-m3).
-4. **Reflects** on whether retrieved evidence is sufficient; re-retrieves if not.
+4. **Routes** a question the planner did not split straight to the answer.
+   A multi-part question goes on to **reflect** on whether the retrieved
+   evidence is sufficient, and re-retrieves if not.
 5. **Answers** with inline citations grounded in specific source chunks,
    returned as a strict Pydantic model.
 
@@ -231,9 +282,10 @@ Every step is type-checked, traced (latency + token spend), and evaluated.
 See [`docs/architecture.md`](docs/architecture.md) for the full diagram.
 
 ```
-question → decompose → [BM25 + dense → RRF → rerank] → reflect → answer
-                            │                              │
-                            └── PubMed/PMC corpus          └── cited Pydantic Answer
+question → decompose → [BM25 + dense → RRF → rerank] ─┬─ one query ──→ answer
+                            │                          └─ several → reflect → answer
+                            └── PubMed/PMC corpus                       │
+                                                                        └── cited Pydantic Answer
 ```
 
 ## How far to trust the evaluation numbers
@@ -373,12 +425,14 @@ medrag/
 
 ## What I'd do differently
 
-1. **Route instead of always looping.** v2 adds one restatement of the
-   question and gets baseline retrieval for 2.5× the latency. When the planner
-   has nothing to split, run the single-shot path and skip reflection.
+1. ~~**Route instead of always looping.**~~ Done: questions the planner does
+   not split now skip the loop, at the same recall and less than half the
+   median latency ([details](#routing-single-part-questions)).
 2. **Add multi-hop questions.** Decomposition should earn its cost on
    questions with independent parts, and this set has almost none, so it can
-   show the agent losing and cannot show it winning.
+   show the agent losing and cannot show it winning. With routing that
+   matters more: 97 of 99 development answers no longer reach the loop at
+   all.
 3. **Make the critic emit a search query.** Today the follow-up search uses
    the critic's complaint verbatim, and reflection has not moved recall on
    either corpus.
@@ -401,8 +455,8 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 187 unit tests that run in under two seconds with no network and
-  no model downloads. Line coverage is 83% overall and 95% on the agent graph;
+- **Tests** — 208 unit tests that run in about six seconds with no network and
+  no model downloads. Line coverage is 85% overall and 95% on the agent graph;
   the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
 - **Reproducible ingestion** — papers are persisted to SQLite, and

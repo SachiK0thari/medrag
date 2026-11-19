@@ -27,6 +27,9 @@ Prints, as GitHub-flavoured markdown:
        context are (gold, judged and passed over, never judged), how the judge
        graded the ones without a gold label, and the retrieval metrics again
        with every paper graded direct counted as gold.
+    3b. For a config with the router (`agentic_v2_routed`), every run's answers
+       split by route: single-shot (the planner did not split the question)
+       or the agent loop, with recall, faithfulness, rerank pairs and latency.
     4. How many answers quote a 95% confidence interval and how many say the
        sources lack the information (pattern counts over the answer text).
     5. For each agentic config, how it differs from the hybrid_reranked
@@ -412,6 +415,54 @@ def attribution(traces: Traces, baseline: str) -> str:
     return "\n".join(lines)
 
 
+def _route(rec: dict) -> str | None:
+    """'single-shot' or 'agent loop' for a config with the router, else None."""
+    decompose = next((e for e in rec["trace"] if e["step"] == "decompose"), None)
+    if decompose is None or "routed" not in decompose:
+        return None
+    return "single-shot" if decompose["routed"] else "agent loop"
+
+
+def route_table(result_paths: list[Path], trace_paths: list[Path]) -> str | None:
+    """Every run's answers split by the route the router sent them down.
+
+    Recall is the harness's, against the curated labels the run was scored on.
+    Rerank pairs come from the last merge step, which holds the answer's total.
+    """
+    by_route: dict[tuple[str, str], list[tuple[dict[str, str], dict]]] = defaultdict(list)
+    for results, traces in zip(result_paths, trace_paths, strict=True):
+        run = load_traces(traces)
+        for cfg, rows in load_rows([results]).items():
+            for row in rows:
+                rec = run.get(cfg, {}).get(row["qid"])
+                route = _route(rec) if rec else None
+                if rec is not None and route is not None:
+                    by_route[(cfg, route)].append((row, rec))
+    if not by_route:
+        return None
+    lines = [
+        "| Config | Route | Answers | Recall@10 | Faithfulness | Rerank pairs "
+        "| p50 latency | p95 latency |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for (cfg, route), pairs in sorted(by_route.items()):
+        rows = [row for row, _ in pairs]
+        faith = [float(r["faithfulness"]) for r in rows if r.get("faithfulness")]
+        lat = [float(r["latency_ms"]) / 1000 for r in rows]
+        rerank = [
+            float(merges[-1].get("rerank_pairs", 0))
+            for _, rec in pairs
+            if (merges := [e for e in rec["trace"] if e["step"] == "merge"])
+        ]
+        lines.append(
+            f"| {cfg} | {route} | {len(rows)} "
+            f"| {_mean([float(r['recall_at_10']) for r in rows]):.3f} "
+            f"| {_mean(faith):.3f} | {_mean(rerank):.0f} "
+            f"| {_percentile(lat, 50):.1f}s | {_percentile(lat, 95):.1f}s |"
+        )
+    return "\n".join(lines)
+
+
 def per_question_diffs(traces: Traces, baseline: str, config: str) -> str:
     base, recs = traces.get(baseline, {}), traces.get(config, {})
     out: list[str] = []
@@ -514,6 +565,13 @@ def main() -> None:
                     f"since ({len(extended)} questions, {n_papers} papers)\n"
                 )
                 print(retrieval_table(runs, extended, args.baseline))
+
+    routes = route_table(
+        [args.results, *repeat_paths(args.results)], [args.traces, *repeat_paths(args.traces)]
+    )
+    if routes:
+        print("\n## Routes (every run; recall against the curated labels)\n")
+        print(routes)
 
     if traces:
         print("\n## Answers (main run)\n")

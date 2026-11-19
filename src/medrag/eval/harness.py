@@ -8,7 +8,8 @@ Configs benchmarked (see `medrag.eval.configs`):
     - hybrid_reranked  (RRF + bge cross-encoder rerank)
     - agentic          (v1 LangGraph loop: decompose + reflect, unmodified)
     - agentic_*        (one-knob ablations of the loop)
-    - agentic_v2       (shipping combination)
+    - agentic_v2       (all the loop fixes, on every question)
+    - agentic_v2_*     (on top of v2: single_rerank experiments; routed, which ships)
 
 Per question and per config we record:
     - recall@10, MRR, nDCG@10 — retrieval quality vs gold PMIDs, scored on the

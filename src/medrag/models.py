@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -141,6 +142,9 @@ class Answer(BaseModel):
     sub_queries: list[SubQuery] = Field(default_factory=list)
     n_retrieval_calls: int = Field(..., ge=1)
     total_chunks_considered: int = Field(..., ge=0)
+    # How the agent answered: "single-shot" when the router sent an atomic
+    # question past the loop, "agent loop" otherwise. None outside the agent.
+    route: Literal["single-shot", "agent loop"] | None = None
 
 
 # --------------------------------------------------------------------------- #

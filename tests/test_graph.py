@@ -138,6 +138,7 @@ _LEGACY_V1 = {
     "keep_original_query": False,
     "rerank_against_original": False,
     "faithful_decomposition": False,
+    "route_atomic": False,
 }
 
 
@@ -468,10 +469,10 @@ def test_faithful_decomposition_uses_v2_prompt(scripted_llm, monkeypatch):
     assert seen[0] == DECOMPOSE_SYSTEM
 
 
-def test_default_agent_is_v2(scripted_llm, monkeypatch):
-    """The no-argument agent (what the API and UI construct) must be the fixed loop."""
+def test_default_agent_is_v2_with_the_router(scripted_llm, monkeypatch):
+    """The no-argument agent (what the API and UI construct) is v2 with routing on."""
     seen: list[str] = []
-    real = ScriptedLLM(decompose='[{"text": "tangent"}]')
+    real = ScriptedLLM(decompose='[{"text": "sq1"}, {"text": "tangent"}]')
 
     def spy(system: str, user: str, **kw: object) -> LLMResponse:
         seen.append(system)
@@ -484,10 +485,18 @@ def test_default_agent_is_v2(scripted_llm, monkeypatch):
     agent = MedRagAgent(hybrid=hybrid, reranker=reranker)  # type: ignore[arg-type]
     _, answer = agent.run("Q?")
 
+    # A multi-part question takes the v2 loop.
     assert seen[0] == DECOMPOSE_SYSTEM_FAITHFUL  # v2 planner prompt
     assert hybrid.calls[0] == "Q?"  # original question searched first
     assert answer.sub_queries[0].text == "Q?"
     assert reranker.calls[-1] == ("Q?", 2)  # merged pool re-scored against the question
+
+    # An atomic one is routed past it.
+    real.decompose = '[{"text": "restated"}]'
+    hybrid.calls.clear()
+    _, _, trace = agent.run_with_trace("Q?")
+    assert hybrid.calls == ["Q?"]
+    assert trace[0]["routed"] is True
 
 
 def test_generate_answer_slices_top_k(scripted_llm):
@@ -499,6 +508,7 @@ def test_generate_answer_slices_top_k(scripted_llm):
     assert answer.total_chunks_considered == 6
     assert answer.n_retrieval_calls == 1
     assert answer.sub_queries == []
+    assert answer.route is None  # not an agent answer
 
 
 def test_hybrid_reranked_config_returns_every_candidate_and_answers_from_the_top_k(
@@ -543,3 +553,90 @@ def test_invoke_raises_if_graph_yields_no_answer(scripted_llm, monkeypatch):
 def test_subquery_model_roundtrip():
     sq = SubQuery(text="x")
     assert sq.rationale is None
+
+
+# --------------------------------------------------------------------------- #
+# Routing atomic questions past the loop                                       #
+# --------------------------------------------------------------------------- #
+
+_V2 = {
+    "keep_original_query": True,
+    "rerank_against_original": True,
+    "faithful_decomposition": True,
+    "route_atomic": False,
+}
+
+
+def _v2_agent(hybrid: FakeHybrid, reranker: FakeReranker, **knobs: object) -> MedRagAgent:
+    return MedRagAgent(hybrid=hybrid, reranker=reranker, **{**_V2, **knobs})  # type: ignore[arg-type]
+
+
+def test_atomic_question_is_routed_past_the_loop(scripted_llm):
+    fake = scripted_llm(decompose='[{"text": "restated question"}]')
+    hybrid = FakeHybrid({"Q?": [_rc("1"), _rc("2"), _rc("3")], "restated question": [_rc("9")]})
+    reranker = FakeReranker()
+
+    retrieved, answer, trace = _v2_agent(hybrid, reranker, route_atomic=True).run_with_trace("Q?")
+
+    assert hybrid.calls == ["Q?"]  # the restatement is dropped
+    assert fake.calls == ["decompose", "answer"]  # no reflect call
+    assert reranker.calls == [("Q?", 3)]  # one rerank pass, no pool rerank
+    assert [rc.paper.pmid for rc in retrieved] == ["1", "2", "3"]
+    assert [sq.text for sq in answer.sub_queries] == ["Q?"]
+    assert answer.route == "single-shot"
+    decompose = trace[0]
+    assert decompose["routed"] is True
+    assert decompose["planner_n"] == 1
+    merge = next(e for e in trace if e["step"] == "merge")
+    assert merge["routed"] is True
+    assert merge["rerank_pairs"] == 3  # the fused list, scored once
+    assert [e["step"] for e in trace] == ["decompose", "retrieve", "merge"]
+
+
+def test_multi_part_question_is_not_routed(scripted_llm):
+    fake = scripted_llm(decompose='[{"text": "sq1"}, {"text": "sq2"}]')
+    hybrid = FakeHybrid({"Q?": [_rc("1")], "sq1": [_rc("2")], "sq2": [_rc("3")]})
+    reranker = FakeReranker()
+
+    _, answer, trace = _v2_agent(hybrid, reranker, route_atomic=True).run_with_trace("Q?")
+
+    assert answer.route == "agent loop"
+    assert hybrid.calls == ["Q?", "sq1", "sq2"]
+    assert "reflect" in fake.calls
+    assert reranker.calls[-1] == ("Q?", 3)  # pool rerank still runs
+    assert trace[0]["routed"] is False
+    assert trace[0]["planner_n"] == 2
+
+
+def test_planner_parse_failure_is_routed(scripted_llm):
+    fake = scripted_llm(decompose="I cannot help with that.")
+    hybrid = FakeHybrid({"Q?": [_rc("1")]})
+    _, _, trace = _v2_agent(hybrid, FakeReranker(), route_atomic=True).run_with_trace("Q?")
+    assert hybrid.calls == ["Q?"]
+    assert "reflect" not in fake.calls
+    assert trace[0]["routed"] is True
+    assert trace[0]["planner_n"] == 1
+
+
+def test_routed_path_ignores_single_rerank(scripted_llm):
+    """With no pool rerank on the routed path, skipping the per-query rerank would leave none."""
+    scripted_llm()
+    hybrid = FakeHybrid({"Q?": [_rc("1"), _rc("2")]})
+    reranker = FakeReranker()
+    agent = _v2_agent(hybrid, reranker, route_atomic=True, single_rerank=True)
+    agent.run("Q?")
+    assert reranker.calls == [("Q?", 2)]
+
+
+def test_route_atomic_off_is_the_v2_loop(scripted_llm):
+    """With the router off an atomic question still takes the full loop."""
+    fake = scripted_llm(decompose='[{"text": "restated"}]')
+    hybrid = FakeHybrid({"Q?": [_rc("1"), _rc("2")], "restated": [_rc("3")]})
+    reranker = FakeReranker()
+
+    _, _, trace = _v2_agent(hybrid, reranker).run_with_trace("Q?")
+
+    assert fake.calls == ["decompose", "reflect", "answer"]
+    assert reranker.calls == [("Q?", 2), ("restated", 1), ("Q?", 3)]
+    assert trace[0]["routed"] is False
+    assert trace[0]["sub_queries"] == ["Q?", "restated"]

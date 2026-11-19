@@ -33,11 +33,12 @@
                  │     │  retrieve    │  BM25 ┐                        │
                  │     │              │       ├─ RRF ─▶ rerank (bge)   │
                  │     │              │  dense┘                        │
-                 │     │              │  then merge the results and    │
-                 │     │              │  rerank the pool against the   │
-                 │     │              │  original question             │
+                 │     │              │  then, for several queries,    │
+                 │     │              │  merge the results and rerank  │
+                 │     │              │  the pool against the question │
                  │     └──────┬───────┘                                │
-                 │            ▼                                        │
+                 │            ├── one query? ──▶ straight to answer    │
+                 │            ▼   (the question was not split)         │
                  │     ┌──────────────┐                                │
                  │     │   reflect    │  sufficient? → answer; if not, │
                  │     │              │  a follow-up search (max 2)    │
@@ -94,11 +95,20 @@ when a call fails the pairs are scored locally instead. The evaluation always
 uses the local model.
 
 **LangGraph for the agent.** An explicit state machine (decompose → retrieve →
-reflect → answer) in which every node appends to a per-step trace. That trace is
+reflect → answer, with a conditional edge from retrieve straight to answer
+for routed questions) in which every node appends to a per-step trace. That trace is
 why the agent is in the shape it is. On the abstracts-only corpus the first
 version scored 0.20 recall@10 below the single-shot pipeline it wraps, and the
 trace showed its sub-queries were finding more gold papers than the baseline and
 then losing them at the merge.
+
+**Routing atomic questions past the loop.** If the planner returns a single
+sub-query, there is nothing to decompose, so the agent searches the question
+alone, reranks once and answers, skipping the pool rerank and reflection. The
+traces showed that is almost every question in the evaluation; over three
+runs routing kept v2's recall and cut the median answer from 14.0 s to 6.5 s.
+Multi-part questions still take the full loop. See
+[`eval_findings.md`](eval_findings.md#routing-single-part-questions).
 
 **One rerank over the merged pool.** Each query's candidates are reranked
 against that query, but the merged pool is then re-scored against the user's
