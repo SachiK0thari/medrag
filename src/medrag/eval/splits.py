@@ -3,10 +3,13 @@
 ``dev`` is the original 33 questions: every ablation was scored on them and
 v2's defaults were chosen from those scores. ``test`` is 20 questions written
 afterwards and never used for tuning (`medrag.eval.questions_test`).
+``multi`` is 10 questions with independent parts, written to exercise the
+agent loop that routing sends almost every dev and test question past
+(`medrag.eval.questions_multi`).
 
-The two splits use the same scripts with separate files, so a test-split run
-can never overwrite development labels or results. Dev files keep their
-original names; test files add ``_test`` before the extension.
+The splits use the same scripts with separate files, so a run on one split
+can never overwrite another's labels or results. Dev files keep their
+original names; the others add ``_test`` or ``_multi`` before the extension.
 """
 
 from __future__ import annotations
@@ -18,19 +21,23 @@ from typing import Any, Literal
 
 from medrag.eval.questions import QUESTIONS, EvalQuestion
 
-Split = Literal["dev", "test"]
-SPLITS: tuple[Split, ...] = ("dev", "test")
+Split = Literal["dev", "test", "multi"]
+SPLITS: tuple[Split, ...] = ("dev", "test", "multi")
 
 _EVAL_PKG = Path(__file__).resolve().parent
 
 
 def _suffix(split: Split) -> str:
-    return "" if split == "dev" else "_test"
+    return "" if split == "dev" else f"_{split}"
 
 
 def questions_for(split: Split) -> list[EvalQuestion]:
     if split == "dev":
         return QUESTIONS
+    if split == "multi":
+        from medrag.eval.questions_multi import MULTI_QUESTIONS
+
+        return MULTI_QUESTIONS
     from medrag.eval.questions_test import TEST_QUESTIONS
 
     return TEST_QUESTIONS

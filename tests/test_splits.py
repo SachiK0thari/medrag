@@ -1,10 +1,11 @@
-"""The test split must stay separate from the development questions and files."""
+"""The question splits must stay separate from one another, questions and files."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from medrag.eval.questions import QUESTIONS
+from medrag.eval.questions_multi import MULTI_QUESTIONS
 from medrag.eval.questions_test import TEST_QUESTIONS
 from medrag.eval.splits import load_generated, questions_for, split_files
 
@@ -30,6 +31,25 @@ def test_test_split_never_shares_a_file_with_dev() -> None:
 def test_questions_for_each_split() -> None:
     assert questions_for("dev") is QUESTIONS
     assert questions_for("test") is TEST_QUESTIONS
+    assert questions_for("multi") is MULTI_QUESTIONS
+
+
+def test_splits_never_share_a_file() -> None:
+    files = [split_files(s, Path("/data")) for s in ("dev", "test", "multi")]
+    paths = [{v for v in vars(f).values() if isinstance(v, Path)} for f in files]
+    for i in range(len(paths)):
+        for j in range(i + 1, len(paths)):
+            assert not paths[i] & paths[j]
+    assert files[2].results == Path("/data/eval_results_multi.csv")
+    assert files[2].module_name("gold_pmids") == "medrag.eval.gold_pmids_multi"
+
+
+def test_multi_questions_are_new() -> None:
+    assert len(MULTI_QUESTIONS) == 10
+    assert len({q.qid for q in MULTI_QUESTIONS}) == 10
+    assert all(q.qid.startswith("m") for q in MULTI_QUESTIONS)
+    others = {q.question.lower() for q in QUESTIONS + TEST_QUESTIONS}
+    assert not {q.question.lower() for q in MULTI_QUESTIONS} & others
 
 
 def test_test_questions_are_new() -> None:

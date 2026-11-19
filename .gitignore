@@ -50,6 +50,9 @@ data/*
 # The test split (20 questions never used for tuning) and its repeats.
 !data/eval_results_test*.csv
 !data/eval_traces_test*.jsonl
+# The multi-part split (10 questions with independent parts).
+!data/eval_results_multi*.csv
+!data/eval_traces_multi*.jsonl
 # Side-by-side experiment runs: reranking once, and routing atomic questions.
 !data/eval_results_single_rerank*.csv
 !data/eval_traces_single_rerank*.jsonl
