@@ -43,14 +43,13 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
   seconds: the Space reranks with Pinecone's hosted reranker, not the
   CPU cross-encoder the 6.5 s evaluation median was measured with.
 
-![A question about the SELECT trial is typed into the MedRAG app. After a short wait the app shows a cited answer, the latency, and the list of source papers, and the first source is opened to show its PMID and the quoted passage.](docs/demo.gif)
+![A question about the SELECT trial is typed into the MedRAG app. After a short wait the app shows a cited answer, the latency, the route it took, and the list of source papers, and the first source is opened to show its PMID and the quoted passage.](docs/demo.gif)
 
 <sub>Recorded from the app running locally (`python scripts/record_demo.py`).
 The wait is shortened in the recording; the latency shown in the app is the
-real one for that query. It was recorded before
-[routing](#routing-single-part-questions) shipped: this one took 18 s against
-the full loop's 14 s median, most of it cross-encoder reranking on CPU. The
-routed median is 6.5 s.</sub>
+real one for that query: 5.1 s against a 6.5 s median. The question has one
+part, so it took the [single-shot route](#routing-single-part-questions),
+shown in the metrics column.</sub>
 
 ---
 

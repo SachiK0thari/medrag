@@ -124,6 +124,12 @@ if st.button("Search", type="primary", disabled=not question):
         st.metric("Latency", f"{latency_s:.2f}s")
         st.metric("Sources cited", len(answer.citations))
         if answer.route:
-            st.metric("Route", answer.route.capitalize())
+            # Not st.metric: its large value font truncates "Single-shot" in
+            # this narrow column.
+            st.markdown(
+                "<p style='font-size:14px;margin-bottom:0.1rem'>Route</p>"
+                f"<p style='font-size:1.4rem;margin-top:0'>{answer.route.capitalize()}</p>",
+                unsafe_allow_html=True,
+            )
         st.metric("Sub-queries", len(answer.sub_queries))
         st.metric("Chunks considered", answer.total_chunks_considered)
