@@ -51,6 +51,13 @@ real one for that query: 5.1 s against a 6.5 s median. The question has one
 part, so it took the [single-shot route](#routing-single-part-questions),
 shown in the metrics column.</sub>
 
+<details>
+<summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/demo-captions.vtt">captions</a>)</summary>
+
+https://github.com/user-attachments/assets/bf9931f9-4643-4625-ba61-0c43d392fd74
+
+</details>
+
 ---
 
 ## Key finding: the first agent made retrieval worse, and the traces showed why
