@@ -50,6 +50,11 @@ kept in full in the second half. Run 2 is the system as it is now.
    reflection. Over three development runs: recall −0.001 against v2
    (−0.012 to +0.011), p50 latency 14.0 s → 6.5 s, faithfulness 0.970 →
    0.973. 97 of 99 answers took the short route. It ships.
+3c. **On questions with several parts the loop wins.** On a 10-question
+   multi-part split, v2 beats the baseline by +0.067 recall (+0.012 to
+   +0.126, extended labels, three runs) at 3.2× the latency. The router
+   sends 7 of 30 of those answers past the loop and keeps about half the
+   gain.
 4. **Full text fixed the answers.** v2 answers quoting a 95% confidence
    interval went from 5 of 33 to 17, and answers saying the sources lack the
    information went from 17 of 33 to 3.
@@ -402,6 +407,64 @@ its routed config was re-run with `--keep-existing` after the reset.
   99 development answers used it, which says nothing either way. The
   multi-hop question set in the next steps is what would.
 
+### On questions with several parts
+
+**Why.** With routing on, the development and test sets barely reach the
+loop, so they cannot show it earning its cost. `questions_multi.py` adds 10
+questions with two or three independent parts each: two trials (SUSTAIN-6
+and LEADER, EXSCEL and Harmony, PIONEER 6 and SOUL, FLOW and REWIND, SELECT
+and STEP-HFpEF, SURPASS-CVOT and STRIDE), two drugs (ELIXA and AMPLITUDE-O),
+two outcomes (atrial fibrillation and stroke; LDL and blood pressure, and
+how much of the MACE effect they explain), or two populations (secondary and
+primary prevention). Before the text was fixed and committed (64ce85e), the
+only check was that each part has at least five papers in the corpus
+matching its keywords.
+
+**Labels.** `curate_gold.py --split multi` picked 26 gold papers;
+`grade_gold.py` graded 4 direct and 22 related, so only 3 questions have a
+strict label. After the eval runs, `extend_gold.py` graded 260 more
+candidates (54 direct, 175 related, 31 irrelevant) from the rebuilt pool and
+every config's contexts, and every question gained a direct paper. The
+extended sets are what the comparison rests on. No label here has had a
+second review.
+
+**Runs.** `hybrid_reranked`, `agentic_v2` and `agentic_v2_routed`, three
+times each in the same sessions (`data/eval_results_multi{,_rep2,_rep3}.csv`).
+
+| 10 questions, 3 runs | Extended lenient | vs baseline (95% CI) | Extended strict | vs baseline | p50 | p95 | Faithfulness |
+|---|---|---|---|---|---|---|---|
+| hybrid_reranked | 0.593 | — | 0.642 | — | 7.7 s | 17.4 s | 0.985 |
+| agentic_v2 | 0.659 | +0.067 (+0.012 to +0.126) | 0.687 | +0.045 (−0.007 to +0.118) | 24.8 s | 47.3 s | 0.968 |
+| agentic_v2_routed | 0.625 | +0.032 (+0.003 to +0.070) | 0.655 | +0.013 (−0.004 to +0.040) | 24.4 s | 39.6 s | 0.999 |
+
+| Routes, every run | Answers | Rerank pairs | p50 |
+|---|---|---|---|
+| agentic_v2_routed, single-shot | 7 | 30 | 6.3 s |
+| agentic_v2_routed, agent loop | 23 | 125 | 26.3 s |
+| agentic_v2, agent loop | 30 | 118 | 24.8 s |
+
+- **The loop wins here, and only here.** v2 is ahead of the baseline on
+  the extended lenient labels in every run (0.654 to 0.670 against 0.593),
+  and the interval excludes zero. The planner wrote 2 to 4 sub-queries
+  (mean 2.8), one per part, as it should. Ten questions make the interval
+  wide; read it as "the loop helps on these", not as a size.
+- **The curated labels are too thin to judge.** 26 papers, and the strict
+  subset is 4 papers on 3 questions, on which every config's interval runs
+  from −1 to 0.
+- **The router is too eager for these.** The planner returned a single
+  sub-query for m09 (LDL and blood pressure, and how much of the MACE
+  reduction they explain) in all three runs, for m10 (secondary against
+  primary prevention) in two, and for m02 and m08 in one each. Those 7
+  answers skipped the loop, and the routed system keeps about half of v2's
+  gain. When the planner did split, the loop's work (pairs, latency) was the
+  same as v2's.
+- **The pool is not tilted toward the agent.** `extend_gold.py` graded every
+  paper in every config's context, so no config is scored against papers
+  only another config surfaced.
+- **Nothing changed because of this split.** Routing stays the default: on
+  the dev and test questions it keeps recall and halves latency, and these
+  10 questions were written to be the case it handles worst.
+
 ## Run 1: the abstracts-only corpus
 
 This is the analysis that found the regression, as written at the time. The
@@ -591,12 +654,13 @@ is worse" instead of "the merge step compares scores that are not comparable".
    answer's context, so the judge could grade those chunks directly.
 4. **Fix or remove the follow-up.** The critic's complaint is still used
    verbatim as a search string, and reflection still shows no benefit.
-5. **Add multi-hop questions.** Comparative questions such as "semaglutide
-   against dulaglutide for MACE" are where decomposition should earn its
-   cost, and the set has almost none. Until it does, this benchmark can show
-   the agent losing and cannot show it winning. With routing on, 97 of 99
-   development answers never reach the loop, so this is now the only way to
-   measure it.
+5. **Grow the multi-part split.** Ten questions showed the loop winning
+   (see [On questions with several parts](#on-questions-with-several-parts)),
+   with a wide interval. More of them, and a person reviewing their labels,
+   would say by how much.
+6. **Route on more than the planner's word.** The planner called 7 of 30
+   multi-part answers atomic. A second signal (two named trials, a
+   comparison) could keep those in the loop.
 
 ## Caveats
 

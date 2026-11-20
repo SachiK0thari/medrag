@@ -34,7 +34,9 @@ short_description: Agentic RAG over GLP-1 cardiovascular literature
   full-text corpus (+0.001 recall, CI −0.019 to +0.018) at 2.5× the latency.
   The traces also showed the planner had nothing to split in almost every
   question, so those now skip the loop: [same recall, p50 latency 14.0 s →
-  6.5 s](#routing-single-part-questions).
+  6.5 s](#routing-single-part-questions). On 10 questions written to have
+  several parts, the loop [does beat the pipeline](#on-questions-with-several-parts)
+  (+0.067 recall, CI +0.012 to +0.126), at three times the latency.
 - **Try it:** [live demo](https://huggingface.co/spaces/SachiK/medrag) on a free
   Hugging Face Space. If nobody has used it for a while, the first load takes
   about a minute while it wakes up. Once it is awake, answers take a few
@@ -197,6 +199,37 @@ questions, they can show it costing time and cannot show it earning it. The
 UI shows which route each answer took. Reproduce it with
 `python scripts/analyze_eval.py --results data/eval_results_routed.csv --baseline agentic_v2 --diff agentic_v2_routed`;
 its "Routes" table splits every run's answers by route.
+
+### On questions with several parts
+
+So the loop got questions of its own: 10 that each ask about two things
+a single search is unlikely to cover together, such as "Compare the MACE
+results of SUSTAIN-6 and LEADER, and explain how the two trial populations
+differed" ([`questions_multi.py`](src/medrag/eval/questions_multi.py)). As
+with the test split, their text was fixed and committed before any system
+ran on them, they were labelled by the same three scripts, and no code
+changed because of them. Three runs of each config, side by side:
+
+| Multi-part split, 10 questions, 3 runs | Recall@10 | vs baseline (95% CI) | p50 latency | $/query |
+|---|---|---|---|---|
+| Hybrid + rerank (baseline) | 0.593 | — | 7.7 s | $0.00059 |
+| Agentic v2 (loop on every question) | 0.659 | **+0.067 (+0.012 to +0.126)** | 24.8 s | $0.00122 |
+| v2 + routing (ships) | 0.625 | +0.032 (+0.003 to +0.070) | 24.4 s | $0.00093 |
+
+This is the first set on which the agent beats the pipeline it wraps, and
+the interval excludes zero, though on 10 questions and only on the extended
+labels. On the strict extended labels the gain is +0.045 (−0.007 to +0.118);
+the curated labels alone (26 papers, only 3 questions with a paper graded
+direct) are too thin to say anything. It costs the loop's usual price, three
+times the baseline's latency.
+
+The planner split 23 of the 30 routed answers and the router sent the other
+7 straight to the answer, among them all three runs of "How do GLP-1
+receptor agonists change LDL cholesterol and systolic blood pressure, and how
+much of their MACE reduction do those changes explain?". That is where the
+routed system gives back about half of the loop's gain. Routing on the
+planner's say-so is right for the development and test questions and too
+eager for these. Reproduce it with `python scripts/analyze_eval.py --split multi`.
 
 ### Reranking each chunk once
 
@@ -430,20 +463,25 @@ medrag/
    median latency ([details](#routing-single-part-questions)).
 2. **Add multi-hop questions.** Decomposition should earn its cost on
    questions with independent parts, and this set has almost none, so it can
-   show the agent losing and cannot show it winning. With routing that
-   matters more: 97 of 99 development answers no longer reach the loop at
-   all.
-3. **Make the critic emit a search query.** Today the follow-up search uses
+   show the agent losing and cannot show it winning. Started: a
+   [10-question multi-part split](#on-questions-with-several-parts) is the
+   first set where the loop beats the pipeline (+0.067 recall, CI +0.012 to
+   +0.126). Ten questions is a start, not a benchmark.
+3. **Route on more than the planner's word.** On those questions the planner
+   called 7 of 30 atomic, and the router sent them past the loop that would
+   have helped. A second signal (the question naming two trials, a
+   comparison) could keep those in the loop.
+4. **Make the critic emit a search query.** Today the follow-up search uses
    the critic's complaint verbatim, and reflection has not moved recall on
    either corpus.
-4. **Have a person review the judge's grades.** Both reviews so far are by a
+5. **Have a person review the judge's grades.** Both reviews so far are by a
    second model that could see the judge's reasons, and they sampled only its
    "direct" grades. A related paper that does answer its
    question is scored as a miss.
-5. **Judge passages, not papers.** A config is credited for a paper whichever
+6. **Judge passages, not papers.** A config is credited for a paper whichever
    of its chunks it retrieved. The traces record the chunk IDs of every
    answer's context, so those chunks could be graded directly.
-6. **Add the landmark trials.** The corpus is 498 PubMed records, nearly all
+7. **Add the landmark trials.** The corpus is 498 PubMed records, nearly all
    from 2025 and 2026, so LEADER and SUSTAIN-6 (2016) are reported
    second-hand by the papers that cite them. And 220 of the 498 are still
    abstract only: 192 are not in PMC, and for 28 PMC holds no downloadable
@@ -455,7 +493,7 @@ medrag/
   every data structure crossing a module boundary.
 - **Lint + format** — ruff with bugbear, simplify, pyupgrade, pep8-naming, annotations.
 - **CI** — every PR runs ruff, ruff-format check, mypy strict, and pytest.
-- **Tests** — 208 unit tests that run in about six seconds with no network and
+- **Tests** — 210 unit tests that run in about six seconds with no network and
   no model downloads. Line coverage is 85% overall and 95% on the agent graph;
   the uncovered code is mostly the network-bound retrieval clients.
 - **Pre-commit hooks** — same checks locally before commit.
